@@ -13,17 +13,20 @@ public class CorsConfig {
         return new WebMvcConfigurer() {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
-                registry.addMapping("/api/**")
+                registry.addMapping("/**")
                         .allowedOriginPatterns(
                                 "http://localhost:*",
                                 "http://127.0.0.1:*",
+                                "https://*.onrender.com",
+                                "https://onrender.com",
                                 "https://*.vercel.app",
                                 "https://vercel.app",
                                 "https://*.netlify.app",
                                 "https://netlify.app"
                         )
-                        .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                        .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD", "PATCH")
                         .allowedHeaders("*")
+                        .exposedHeaders("Authorization", "Content-Type")
                         .allowCredentials(true)
                         .maxAge(3600);
             }

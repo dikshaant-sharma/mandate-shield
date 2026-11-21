@@ -1,17 +1,14 @@
 import axios from 'axios';
 
-// Support VITE_API_URL, VITE_API_BASE_URL, or default to the live Render backend
-const BACKEND_ROOT = import.meta.env.VITE_API_URL 
-  || import.meta.env.VITE_API_BASE_URL 
-  || 'https://mandate-shield.onrender.com';
-
-// Ensure no trailing slash so path concatenation is always /api/v1
-const cleanRoot = BACKEND_ROOT.replace(/\/+$/, '');
+// Directly hardcoded backend root for Render (https://mandate-shield.onrender.com)
+const BACKEND_ROOT = 'https://mandate-shield.onrender.com';
 
 const api = axios.create({
-  baseURL: `${cleanRoot}/api/v1`,
-  headers: { 'Content-Type': 'application/json' },
-  timeout: 30000
+  baseURL: `${BACKEND_ROOT}/api/v1`,
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  timeout: 45000
 });
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('mandateshield_token');
