@@ -1,7 +1,7 @@
 package com.mandateshield.controller;
 
 import com.mandateshield.engine.MerchantResolverEngine;
-import com.mandateshield.service.GeminiMerchantEnrichmentService;
+import com.mandateshield.service.SarvamMerchantEnrichmentService;
 import com.mandateshield.engine.MerchantResolverEngine.ResolveResult;
 import com.mandateshield.dto.ResolveResponse;
 import com.mandateshield.dto.ResolveRequest;
@@ -23,11 +23,12 @@ import java.util.Map;
 public class MerchantResolverController {
 
     private final MerchantResolverEngine resolverEngine;
-    private final GeminiMerchantEnrichmentService geminiEnrichment;
+    private final SarvamMerchantEnrichmentService sarvamEnrichment;
 
     @PostMapping("/resolve")
     @Operation(summary = "Resolve a raw transaction descriptor",
-               description = "Takes a raw bank/payment descriptor and resolves it to a known merchant brand using Tier 1 (regex) and Tier 2 (heuristic) resolution.")
+               description = "Resolves a raw bank/payment descriptor through Tier 1 (system-approved aliases), "
+                       + "Tier 2 (heuristic/vector), Tier 2.5 (unnamed recurring), and Tier 3 (Sarvam AI async).")
     public ResponseEntity<ResolveResponse> resolve(@AuthenticationPrincipal Long userId, @RequestBody ResolveRequest request) {
         if (request.rawDescriptor() == null || request.rawDescriptor().isBlank()) {
             throw new IllegalArgumentException("rawDescriptor must be provided");
@@ -40,10 +41,12 @@ public class MerchantResolverController {
                 request.currency(),
                 request.transactionDate()
         );
-        geminiEnrichment.scheduleIfUnknown(userId, request.rawDescriptor(), result.confidenceScore(), result.brandName());
-        if (result.resolutionTier() == com.mandateshield.domain.ResolutionTier.TIER_1) {
-            geminiEnrichment.synchronizeKnownTierOne(userId, request.rawDescriptor(), result.brandName(), result.confidenceScore());
-        }
+
+        // Sarvam enrichment is already scheduled inside MerchantResolverEngine for Tier 2.5/unknown cases.
+        // We also schedule here defensively in case the caller bypasses the engine for a suspicious result.
+        sarvamEnrichment.scheduleIfSuspicious(userId, request.rawDescriptor(),
+                result.confidenceScore(), result.brandName());
+
         ResolveResponse response = new ResolveResponse(
                 result.brandName(),
                 result.category(),
@@ -56,17 +59,17 @@ public class MerchantResolverController {
     }
 
     @GetMapping("/patterns")
-    @Operation(summary = "List all merchant patterns",
-               description = "Returns all stored merchant patterns including auto-learned ones.")
+    @Operation(summary = "List system-approved merchant patterns",
+               description = "Returns only system-seeded/admin-approved merchant patterns. Auto-learned entries are excluded.")
     public ResponseEntity<?> listPatterns(@AuthenticationPrincipal Long userId) {
         return ResponseEntity.ok(resolverEngine.getAllPatterns(userId));
     }
 
     @PostMapping("/patterns/cache/clear")
-    @Operation(summary = "Clear the pattern cache",
-               description = "Invalidates the compiled regex cache. Use after manually updating patterns in the database.")
+    @Operation(summary = "No-op cache clear (retained for API compatibility)",
+               description = "No in-memory pattern cache exists. Endpoint retained for client compatibility.")
     public ResponseEntity<?> clearCache() {
         resolverEngine.clearPatternCache();
-        return ResponseEntity.ok(Map.of("status", "cache_cleared"));
+        return ResponseEntity.ok(Map.of("status", "no_cache_exists", "message", "Pattern cache removed by design. Only system-approved DB entries are used."));
     }
 }

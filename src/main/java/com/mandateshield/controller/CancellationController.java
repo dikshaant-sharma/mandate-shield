@@ -52,7 +52,13 @@ public class CancellationController {
                 merchantName,
                 request.mandateRef()
         );
-        return ResponseEntity.ok(Map.of("letter", letter));
+        String bankEmail = cancellationService.getBankEmail(request.bankName());
+        String emailSubject = "STATUTORY NOTICE: Immediate Revocation of Mandate - " + merchantName.toUpperCase() + " (Ref: " + request.mandateRef() + ")";
+        return ResponseEntity.ok(Map.of(
+                "letter", letter,
+                "bankEmail", bankEmail,
+                "emailSubject", emailSubject
+        ));
     }
 
     @PostMapping("/{subscriptionId}/request")

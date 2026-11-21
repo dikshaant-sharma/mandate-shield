@@ -8,6 +8,21 @@ import java.util.List;
 @Service
 public class CancellationAndRevocationService {
 
+    public String getBankEmail(String bankName) {
+        if (bankName == null) return "nodal.officer@bank.com";
+        String normalized = bankName.toUpperCase();
+        if (normalized.contains("HDFC")) return "grievance.redressal@hdfcbank.com";
+        if (normalized.contains("ICICI")) return "headservicequality@icicibank.com";
+        if (normalized.contains("SBI") || normalized.contains("STATE BANK")) return "customercare@sbi.co.in";
+        if (normalized.contains("AXIS")) return "nodal.officer@axisbank.com";
+        if (normalized.contains("KOTAK")) return "nodalofficer@kotak.com";
+        if (normalized.contains("PUNJAB") || normalized.contains("PNB")) return "nodalofficer@pnb.co.in";
+        if (normalized.contains("BOB") || normalized.contains("BARODA")) return "gm.ops.bcc@bankofbaroda.com";
+        if (normalized.contains("CANARA")) return "nodalofficer@canarabank.com";
+        if (normalized.contains("INDUS")) return "nodal.officer@indusind.com";
+        if (normalized.contains("YES")) return "head.customerservice@yesbank.in";
+        return "grievance.officer@" + normalized.replaceAll("[^A-Z]", "").toLowerCase() + ".com";
+    }
     public String getPlaybook(String rail) {
         return switch (rail != null ? rail.toUpperCase() : "") {
             case "UPI_AUTOPAY" -> "1. Open your UPI app (GPay, PhonePe, Paytm). 2. Go to 'AutoPay' or 'Mandates' section. 3. Select the mandate. 4. Click 'Pause' or 'Revoke/Cancel'.";
@@ -67,20 +82,39 @@ public class CancellationAndRevocationService {
     public String generateRevocationLetter(String userName, String bankName, String merchantName, String mandateRef) {
         return """
             To,
-            The Branch Manager, %s
+            The Nodal Officer / Grievance Redressal Officer / Branch Manager
+            %s
             
-            SUBJECT: NOTICE OF REVOCATION AND CANCELLATION OF MANDATE FOR %s
+            SUBJECT: STATUTORY NOTICE OF IMMEDIATE REVOCATION & WITHDRAWAL OF MANDATE / AUTO-DEBIT CONSENT
+            REFERENCE: RBI Circular RBI/2020-21/68 (DPSS.CO.PD.No.750/02.14.003/2020-21) on e-Mandates & Standing Instructions
             
             Dear Sir/Madam,
             
-            I, %s, hereby formally revoke and withdraw consent for the recurring payment mandate 
-            registered under Reference/Descriptor: %s in favor of %s with immediate effect.
+            I, %s, maintain an account/card facility with your institution.
             
-            Please acknowledge this request in writing and confirm the mandate withdrawal and its effective date.
+            Pursuant to the Reserve Bank of India (RBI) regulatory framework on Processing of e-Mandates / Standing Instructions / NACH, an account holder retains the unequivocal statutory right to withdraw and revoke consent for recurring debits at any time.
             
-            Date: %s
+            I hereby formally and irrevocably REVOKE, CANCEL, and WITHDRAW my consent for any further debits under the following mandate with IMMEDIATE EFFECT:
+            
+            • Merchant / Beneficiary Name : %s
+            • Mandate Reference / UMN / UMRN: %s
+            • Payment Facility            : %s Account / Card
+            • Revocation Notice Date       : %s
+            
+            Please note that any debit executed by your institution against this mandate subsequent to receipt of this notice shall be deemed unauthorized under RBI guidelines, and you are requested to block all future presentments immediately.
+            
+            Kindly provide a written acknowledgement confirming this mandate cancellation along with the formal cancellation ticket reference number.
+            
             Sincerely,
             %s
-            """.formatted(bankName, merchantName.toUpperCase(), userName, mandateRef, merchantName, LocalDate.now(), userName);
+            """.formatted(
+                bankName != null ? bankName : "Bank / Card Issuer",
+                userName != null ? userName : "Account Holder",
+                merchantName != null ? merchantName.toUpperCase() : "MERCHANT",
+                mandateRef != null ? mandateRef : "N/A",
+                bankName != null ? bankName : "Bank",
+                LocalDate.now(),
+                userName != null ? userName : "Account Holder"
+            );
     }
 }
