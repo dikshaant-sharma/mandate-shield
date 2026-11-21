@@ -2,7 +2,7 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "https://YOUR_BACKEND_API_URL/api/$1"
+      "destination": "https://mandate-shield.onrender.com/api/$1"
     },
     {
       "source": "/(.*)",
