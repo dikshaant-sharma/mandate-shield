@@ -55,6 +55,39 @@ public class CancellationController {
         return ResponseEntity.ok(Map.of("letter", letter));
     }
 
+    @PostMapping("/direct-mail")
+    public ResponseEntity<?> sendDirectMail(@AuthenticationPrincipal Long userId, @Valid @RequestBody DirectMailRequest request) {
+        String merchantName;
+        SubscriptionDocument subscription = null;
+        if (request.subscriptionId() != null && !request.subscriptionId().isBlank()) {
+            subscription = subscriptions.findByIdAndUserId(request.subscriptionId(), userId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Recurring payment not found."));
+            merchantName = subscription.getMerchantName();
+        } else if (request.merchantName() != null && !request.merchantName().isBlank()) {
+            merchantName = request.merchantName().trim();
+        } else {
+            throw new IllegalArgumentException("Provide a recurring payment or merchant name for the direct mail notice.");
+        }
+        var user = users.findById(userId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Account not found."));
+
+        CancellationAndRevocationService.DirectMailPackage directMail = cancellationService.prepareDirectMail(
+                user.getFullName(),
+                user.getEmail(),
+                request.bankName(),
+                merchantName,
+                request.mandateRef(),
+                request.recipientEmail()
+        );
+
+        if (subscription != null) {
+            subscription.setStatus(SubscriptionStatus.CANCELLATION_REQUESTED);
+            subscriptions.save(subscription);
+        }
+
+        return ResponseEntity.ok(directMail);
+    }
+
     @PostMapping("/{subscriptionId}/request")
     public ResponseEntity<?> requestCancellation(@AuthenticationPrincipal Long userId, @PathVariable String subscriptionId) {
         SubscriptionDocument subscription = subscriptions.findByIdAndUserId(subscriptionId, userId)
@@ -107,4 +140,13 @@ public class CancellationController {
 
     public record RevocationRequest(String subscriptionId, String merchantName,
                                     @NotBlank String bankName, @NotBlank String mandateRef) {}
+
+    public record DirectMailRequest(
+            String subscriptionId,
+            String merchantName,
+            @NotBlank String bankName,
+            @NotBlank String mandateRef,
+            String recipientEmail,
+            String notes
+    ) {}
 }

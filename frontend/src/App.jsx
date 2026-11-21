@@ -2,8 +2,17 @@ import React, { useEffect, useState } from 'react';
 import Sidebar from './components/Sidebar';
 import ResolverPlayground from './pages/ResolverPlayground';
 import CancellationStudio from './pages/CancellationStudio';
-import { addTransaction, deleteTransaction, fetchDashboard, fetchMe, fetchTransactions, generateLetter, getPlaybook, login, register, requestCancellation, confirmCancellation, reportUnused, confirmSubscriptionActivity, runPipeline, importTransactions, seedSyntheticHistory, fetchSyntheticEvaluation } from './api';
-import { ReceiptText, Plus, X, ArrowUpRight, ShieldCheck, LoaderCircle, Upload, Sparkles } from 'lucide-react';
+import { 
+  addTransaction, deleteTransaction, fetchDashboard, fetchMe, fetchTransactions, 
+  generateLetter, sendDirectMail, getPlaybook, login, register, requestCancellation, 
+  confirmCancellation, reportUnused, confirmSubscriptionActivity, runPipeline, 
+  importTransactions, seedSyntheticHistory, fetchSyntheticEvaluation,
+  fetchVoiceBriefing, fetchVoiceSummary
+} from './api';
+import { 
+  ReceiptText, Plus, X, ArrowUpRight, ShieldCheck, LoaderCircle, Upload, Sparkles, 
+  Volume2, Mail, Send, BellRing, ExternalLink, Check, AlertTriangle, Play 
+} from 'lucide-react';
 
 const money = (amount, currency='INR') => new Intl.NumberFormat('en-IN',{style:'currency',currency,maximumFractionDigits:2}).format(Number(amount||0));
 const frequencyLabel = (frequency) => ({DAILY:'Daily',WEEKLY:'Weekly',BIWEEKLY:'Every 2 weeks',MONTHLY:'Monthly',BIMONTHLY:'Every 2 months',QUARTERLY:'Every 3 months',SEMIANNUAL:'Twice a year',ANNUAL:'Yearly',IRREGULAR:'Variable schedule',UNKNOWN:'Unknown'}[frequency]||'Recurring');
@@ -12,10 +21,10 @@ function parseCsv(text){const rows=[];let row=[],cell='',quoted=false;for(let i=
 function AuthScreen({onAuthenticated}) {
   const [mode,setMode]=useState('login'); const [form,setForm]=useState({fullName:'',email:'',password:''}); const [busy,setBusy]=useState(false); const [error,setError]=useState('');
   const submit=async(e)=>{e.preventDefault();setBusy(true);setError('');try{const result=mode==='register'?await register(form):await login({email:form.email,password:form.password});onAuthenticated(result);}catch(err){setError(err.response?.data?.message||err.response?.data?.detail||err.message||'We could not sign you in. Please check your details and try again.');}finally{setBusy(false);}};
-  return <main className="auth-page"><section className="auth-card"><div className="auth-brand"><div className="sidebar-logo-icon"><ShieldCheck size={22}/></div><div><strong>MandateShield</strong><span>Your payments, understood.</span></div></div><h1>{mode==='login'?'Welcome back':'Create your account'}</h1><p className="auth-intro">Keep your recurring payments organized and easy to review.</p><form onSubmit={submit} className="auth-form">
+  return <main className="auth-page"><section className="auth-card"><div className="auth-brand"><div className="sidebar-logo-icon"><ShieldCheck size={22}/></div><div><strong>MandateShield</strong><span>Your payments, understood.</span></div></div><h1>{mode==='login'?'Welcome back':'Create your account'}</h1><p className="auth-intro">Keep your recurring payments organized, secured, and compliant with RBI e-mandate rules.</p><form onSubmit={submit} className="auth-form">
     {mode==='register'&&<label className="form-group"><span className="form-label">Your name</span><input className="form-control" required maxLength="80" autoComplete="name" value={form.fullName} onChange={e=>setForm({...form,fullName:e.target.value})} placeholder="Alex Morgan"/></label>}
     <label className="form-group"><span className="form-label">Email address</span><input className="form-control" required type="email" autoComplete="email" value={form.email} onChange={e=>setForm({...form,email:e.target.value})} placeholder="you@example.com"/></label>
-    <label className="form-group"><span className="form-label">Password</span><input className="form-control" required minLength="8" type="password" autoComplete={mode==='login'?'current-password':'new-password'} value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="At least 8 characters"/></label>
+    <label className="form-group"><span className="form-label">Password</span><input className="form-control" required minLength="8" type="password" autoComplete={mode==='login'?'current-password':'new-password'} value={form.password} onChange={e=>setForm({...form,password:e.target.value})} placeholder="At least 8 characters (letters + numbers)"/></label>
     {error&&<div className="alert alert-error">{error}</div>}<button className="btn btn-primary btn-lg" style={{width:'100%',justifyContent:'center'}} disabled={busy}>{busy?<LoaderCircle className="spinner" size={18}/>:null}{mode==='login'?'Sign in':'Create account'}</button>
   </form><p className="auth-switch">{mode==='login'?"New to MandateShield?":"Already have an account?"} <button onClick={()=>{setMode(mode==='login'?'register':'login');setError('');}}>{mode==='login'?'Create an account':'Sign in'}</button></p></section></main>;
 }
@@ -23,24 +32,20 @@ function AuthScreen({onAuthenticated}) {
 function parseBankSms(text) {
   if (!text || !text.trim()) return null;
   const clean = text.trim();
-  // Match amount (Rs. 649, Rs 1499.00, INR 499)
   const amtMatch = clean.match(/(?:Rs\.?|INR)\s*([\d,]+(?:\.\d{1,2})?)/i);
   const amount = amtMatch ? amtMatch[1].replace(/,/g, '') : '';
   
-  // Match rail
   let paymentRail = 'OTHER';
   if (/UPI|AUTOPAY/i.test(clean)) paymentRail = 'UPI';
   else if (/CREDIT CARD|CARD ENDING|ON CARD/i.test(clean)) paymentRail = 'CREDIT_CARD';
   else if (/DEBIT CARD/i.test(clean)) paymentRail = 'DEBIT_CARD';
   else if (/ACH|NACH|MANDATE/i.test(clean)) paymentRail = 'NACH';
 
-  // Extract merchant / descriptor candidate
   let descriptor = '';
   const atMatch = clean.match(/(?:at|to|in favor of|info:)\s+([^.,;\n]+)/i);
   if (atMatch) {
     descriptor = atMatch[1].trim();
   } else {
-    // fallback: find capital words sequence
     const words = clean.split(/\s+/).filter(w => w.length > 2 && /^[A-Z0-9_*]+$/.test(w));
     descriptor = words.slice(0, 3).join(' ') || clean.slice(0, 40);
   }
@@ -103,8 +108,10 @@ function TransactionForm({onSave,onClose}) {
 }
 
 export default function App(){
-  const [user,setUser]=useState(null);const [checking,setChecking]=useState(Boolean(localStorage.getItem('mandateshield_token')));const [activeTab,setActiveTab]=useState('dashboard');const [transactions,setTransactions]=useState([]);const [dashboard,setDashboard]=useState(null);const [showForm,setShowForm]=useState(false);const [loading,setLoading]=useState(false);const [notice,setNotice]=useState('');const [cancelTarget,setCancelTarget]=useState(null);const [playbook,setPlaybook]=useState(null);const [letter,setLetter]=useState('');const [cancelForm,setCancelForm]=useState({bankName:'',mandateRef:''});const [cancelBusy,setCancelBusy]=useState(false);const [cancelRequested,setCancelRequested]=useState(false);const [demo,setDemo]=useState(null);const [demoBusy,setDemoBusy]=useState(false);
+  const [user,setUser]=useState(null);const [checking,setChecking]=useState(Boolean(localStorage.getItem('mandateshield_token')));const [activeTab,setActiveTab]=useState('dashboard');const [transactions,setTransactions]=useState([]);const [dashboard,setDashboard]=useState(null);const [showForm,setShowForm]=useState(false);const [loading,setLoading]=useState(false);const [notice,setNotice]=useState('');const [cancelTarget,setCancelTarget]=useState(null);const [playbook,setPlaybook]=useState(null);const [letter,setLetter]=useState('');const [cancelForm,setCancelForm]=useState({bankName:'',mandateRef:'',recipientEmail:''});const [directMailInfo,setDirectMailInfo]=useState(null);const [cancelBusy,setCancelBusy]=useState(false);const [cancelRequested,setCancelRequested]=useState(false);const [demo,setDemo]=useState(null);const [demoBusy,setDemoBusy]=useState(false);
   const [savingSkeleton, setSavingSkeleton]=useState(null);
+  const [voiceBriefing, setVoiceBriefing]=useState(null);
+  const [voiceLoading, setVoiceLoading]=useState(false);
 
   function signOut(){localStorage.removeItem('mandateshield_token');setUser(null);setTransactions([]);setDashboard(null);}
   const load=async()=>{setLoading(true);try{const [tx,dash]=await Promise.all([fetchTransactions(),fetchDashboard()]);setTransactions(tx);setDashboard(dash);try{setDemo(await fetchSyntheticEvaluation());}catch{setDemo(null);}}catch(e){if(e.response?.status===401)signOut();else setNotice('We could not load your account data. Please try again.');}finally{setLoading(false);}};
@@ -113,7 +120,6 @@ export default function App(){
   const authenticate=(session)=>{localStorage.setItem('mandateshield_token',session.token);setUser(session.user);};
   
   const saveTransaction=async(payload)=>{
-    // 1. Immediately display skeleton in the transaction list
     setSavingSkeleton({
       id: 'skeleton-pending',
       merchant: payload.merchantName || payload.merchant || 'Resolving merchant...',
@@ -128,7 +134,6 @@ export default function App(){
       const saved = await addTransaction(payload);
       setTransactions(prev=>[saved,...prev.filter(t=>t.id!==saved.id)]);
       setNotice(saved.merchant==='UNKNOWN'?'Transaction added. Checking merchant details in background.':`${saved.merchant} recorded successfully.`);
-      // Run pipeline and update dashboard in background
       runPipeline().then(()=>fetchDashboard().then(setDashboard)).catch(()=>{});
       return true;
     }catch(err){
@@ -140,13 +145,71 @@ export default function App(){
   };
 
   const removeTransaction=async(id)=>{try{await deleteTransaction(id);setTransactions(prev=>prev.filter(tx=>tx.id!==id));setNotice('Transaction deleted.');}catch{setNotice('Could not delete this transaction.');}};
-  const openCancellation=async(sub)=>{setCancelTarget(sub);setLetter('');setCancelRequested(false);setCancelForm({bankName:'',mandateRef:''});try{setPlaybook(await getPlaybook(sub.paymentRail,sub.merchantName));}catch{setPlaybook(null);}};
-  const createLetter=async(e)=>{e.preventDefault();setCancelBusy(true);try{const result=await generateLetter({subscriptionId:cancelTarget.id,...cancelForm});setLetter(result.letter);}catch(err){setNotice(err.response?.data?.message||'Could not prepare the notice.');}finally{setCancelBusy(false);}};
+  const openCancellation=async(sub)=>{
+    setCancelTarget(sub);
+    setLetter('');
+    setDirectMailInfo(null);
+    setCancelRequested(false);
+    setCancelForm({
+      bankName: 'HDFC Bank',
+      mandateRef: `MND-${(sub.paymentRail||'UPI')}-${(sub.merchantName||'SUB').toUpperCase()}-01`,
+      recipientEmail: ''
+    });
+    try{setPlaybook(await getPlaybook(sub.paymentRail,sub.merchantName));}catch{setPlaybook(null);}
+  };
+
+  const createDirectMail=async(e)=>{
+    e.preventDefault();
+    setCancelBusy(true);
+    try{
+      const result=await sendDirectMail({
+        subscriptionId:cancelTarget.id,
+        bankName:cancelForm.bankName,
+        mandateRef:cancelForm.mandateRef,
+        recipientEmail:cancelForm.recipientEmail
+      });
+      setLetter(result.body);
+      setDirectMailInfo(result);
+      setCancelRequested(true);
+      setNotice(`Direct Mail prepared for ${result.recipientEmail}. Ref: ${result.trackingRef}`);
+    }catch(err){
+      setNotice(err.response?.data?.message||'Could not prepare the direct mail.');
+    }finally{
+      setCancelBusy(false);
+    }
+  };
+
+  const launchMailClient=()=>{
+    if (!directMailInfo?.mailtoUri) return;
+    window.location.href = directMailInfo.mailtoUri;
+  };
+
   const markCancelled=async()=>{setCancelBusy(true);try{if(!cancelRequested){await requestCancellation(cancelTarget.id);setCancelRequested(true);setNotice('Cancellation request recorded. Keep the confirmation and verify the next statement.');}else{await confirmCancellation(cancelTarget.id);setNotice('Cancellation confirmed and removed from your active commitments.');setCancelTarget(null);}await load();}catch(err){setNotice(err.response?.data?.message||'Could not update this recurring payment.');}finally{setCancelBusy(false);}};
   const markUnused=async(sub)=>{try{await reportUnused(sub.id);await load();setNotice(`Saved your report that you stopped using ${sub.merchantName}.`);}catch{setNotice('Could not save your usage report.');}};
   const markUsed=async(sub)=>{try{await confirmSubscriptionActivity(sub.id);await load();setNotice(`Usage confirmed for ${sub.merchantName}.`);}catch{setNotice('Could not save your usage confirmation.');}};
   const loadDemo=async()=>{setDemoBusy(true);try{setDemo(await seedSyntheticHistory());await load();setNotice('Synthetic sample history added to your account and reviewed.');}catch{setNotice('Could not load the synthetic sample history.');}finally{setDemoBusy(false);}};
-  const importCsv=async(event)=>{const file=event.target.files?.[0];if(!file)return;try{const parsed=parseCsv(await file.text());const rows=parsed.map(r=>({rawDescriptor:r.raw_descriptor||r.descriptor||r.description||r.merchant,amount:r.amount,currency:r.currency||'INR',transactionDate:r.transaction_date||r.date,paymentRail:r.payment_rail||r.rail||'OTHER',merchantName:r.merchant_name||'',category:r.category||'',trialTransaction:/^(true|yes|1)$/i.test(r.trial_transaction||''),trialEndDate:r.trial_end_date||'',trialConversionAmount:r.trial_conversion_amount||''})).filter(r=>r.rawDescriptor&&r.amount&&r.transactionDate);if(!rows.length)throw new Error('Use the CSV template with description, amount, date, currency, and payment_rail columns.');await importTransactions(rows);await runPipeline();await load();setNotice(`${rows.length} transaction${rows.length===1?'':'s'} imported and reviewed.`);}catch(err){setNotice(err.response?.data?.message||err.message||'The CSV could not be imported.');}finally{event.target.value='';}};
+  const importCsv=async(event)=>{const file=event.target.files?.[0];if(!file)return;try{const parsed=parseCsv(await file.text());const rows=parsed.map(r=>({rawDescriptor:r.raw_descriptor||r.descriptor||r.description||r.merchant,amount:r.amount,currency:r.currency||'INR',transactionDate:r.transaction_date||r.date,paymentRail:r.payment_rail||r.rail||'OTHER',merchantName:r.merchant_name||'',category:r.category||'',trialTransaction:/^(true|yes|1)$/i.test(r.trial_transaction||''),trialEndDate:r.trial_end_date||'',trialConversionAmount:r.trial_conversion_amount||''})).filter(r=>r.rawDescriptor&&r.amount&&r.transactionDate);if(!rows.length)throw new Error('Use the CSV template with description, amount, date, currency, and payment_rail columns.');await importTransactions(rows);await runPipeline();await load();setNotice(`${rows.length} transaction${rows.length===1?'':'s'} imported and reviewed in batch.`);}catch(err){setNotice(err.response?.data?.message||err.message||'The CSV could not be imported.');}finally{event.target.value='';}};
+
+  const playVoiceBriefing=async(subId)=>{
+    setVoiceLoading(true);
+    setNotice('');
+    try{
+      const data = subId ? await fetchVoiceBriefing(subId) : await fetchVoiceSummary();
+      setVoiceBriefing(data);
+      if(data.audioBase64){
+        const audio = new Audio("data:audio/wav;base64," + data.audioBase64);
+        audio.play().catch(()=>{});
+      } else if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        const u = new SpeechSynthesisUtterance(data.transcript);
+        u.lang = 'hi-IN';
+        window.speechSynthesis.speak(u);
+      }
+    }catch{
+      setNotice('Could not load Sarvam AI Hinglish voice briefing right now.');
+    }finally{
+      setVoiceLoading(false);
+    }
+  };
 
   if(checking)return <div className="auth-page"><div className="spinner"/></div>;
   if(!user)return <AuthScreen onAuthenticated={authenticate}/>;
@@ -164,11 +227,17 @@ export default function App(){
           <p className="page-subtitle">
             {activeTab==='dashboard'?`Good to see you, ${user.name}. Here’s your recurring payment intelligence.`
               :activeTab==='transactions'?'Your complete personal statement and payment history.'
-              :activeTab==='resolver'?'Test raw descriptor resolution across Tier 1 (Regex), Tier 2 (Vector/Heuristic), and Tier 3 (LLM).'
-              :'Cancellation request drafts and step-by-step payment guidance.'}
+              :activeTab==='resolver'?'Test raw descriptor resolution across Tier 1 (Regex), Tier 2 (Vector/Heuristic), and Tier 3 (Sarvam AI).'
+              :'Direct mail cancellation drafts and step-by-step payment guidance.'}
           </p>
         </div>
         <div className="header-actions">
+          {activeTab==='dashboard'&&(
+            <button className="btn btn-secondary" disabled={voiceLoading} onClick={()=>playVoiceBriefing(null)} title="Sarvam AI Hinglish Voice Summary">
+              <Volume2 size={16} className={voiceLoading?'spinner':''}/>
+              <span>{voiceLoading?'Synthesizing…':'Hinglish Briefing (Sarvam AI)'}</span>
+            </button>
+          )}
           <label className="btn btn-secondary"><Upload size={16}/>Import CSV<input type="file" accept=".csv,text/csv" hidden onChange={importCsv}/></label>
           <a className="text-button" download="mandateshield-transactions-template.csv" href={`data:text/csv;charset=utf-8,${encodeURIComponent('description,amount,date,currency,payment_rail,merchant_name,category,trial_transaction\nNETFLIX SUBSCRIPTION,499.00,2026-09-01,INR,CREDIT_CARD,Netflix,Entertainment,false')}`}>CSV template</a>
           <button className="btn btn-primary" onClick={()=>setShowForm(true)}><Plus size={17}/>Add transaction</button>
@@ -177,6 +246,92 @@ export default function App(){
 
       <div className="page-content animate-fade-up">
         {notice&&<div className="alert alert-info" style={{marginBottom:18}}>{notice}<button onClick={()=>setNotice('')} style={{marginLeft:'auto',color:'inherit',background:'none',border:0,cursor:'pointer'}}>Dismiss</button></div>}
+
+        {/* 24-48 Hours Upcoming Debit Pre-Debit Alerts (RBI Circular Compliance) */}
+        {activeTab==='dashboard'&&(dashboard?.upcomingDebitAlerts||[]).length>0&&(
+          <div style={{
+            background: 'rgba(245, 158, 11, 0.08)',
+            border: '1px solid rgba(245, 158, 11, 0.3)',
+            borderRadius: 12,
+            padding: '16px 20px',
+            marginBottom: 20
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <BellRing size={20} color="#f59e0b" />
+                <div>
+                  <strong style={{ fontSize: 15, color: '#f59e0b' }}>
+                    RBI Mandate Pre-Debit Alert (24–48 Hours Notice)
+                  </strong>
+                  <span style={{ display: 'block', fontSize: 12, color: 'var(--color-text-muted)' }}>
+                    RBI rules require 24-48h advance notice before e-mandate debit. You may opt out or revoke before execution.
+                  </span>
+                </div>
+              </div>
+              <span className="badge" style={{ background: '#f59e0b', color: '#000', fontWeight: 700 }}>
+                RBI Compliant Notice
+              </span>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 12 }}>
+              {dashboard.upcomingDebitAlerts.map((debit, idx)=>(
+                <div key={idx} style={{
+                  background: 'var(--color-bg-card, #1e293b)',
+                  border: '1px solid #334155',
+                  borderRadius: 8,
+                  padding: '12px 16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 8
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <strong style={{ fontSize: 15, color: '#ffffff' }}>{debit.merchantName}</strong>
+                    <span style={{
+                      fontSize: 11,
+                      fontWeight: 700,
+                      padding: '2px 8px',
+                      borderRadius: 12,
+                      background: debit.isWithin24Hours ? '#ef4444' : '#f59e0b',
+                      color: '#ffffff'
+                    }}>
+                      {debit.isWithin24Hours ? `🚨 Due in ${debit.hoursRemaining}h` : `⏳ Due in ${debit.hoursRemaining}h`}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>
+                    Scheduled Charge: <strong style={{ color: '#ffffff' }}>{money(debit.amount, debit.currency)}</strong> via {debit.paymentRail?.replaceAll('_', ' ')}
+                  </div>
+                  <p style={{ fontSize: 11, color: 'var(--color-text-muted)', margin: 0 }}>
+                    {debit.rbiComplianceNotice}
+                  </p>
+                  <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={()=>{
+                        const sub = (dashboard.activeSubscriptions || []).find(s => s.id === debit.subscriptionId) || {
+                          id: debit.subscriptionId,
+                          merchantName: debit.merchantName,
+                          paymentRail: debit.paymentRail
+                        };
+                        openCancellation(sub);
+                      }}
+                    >
+                      <Mail size={13}/>
+                      <span>Direct Mail Revoke</span>
+                    </button>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={()=>playVoiceBriefing(debit.subscriptionId)}
+                    >
+                      <Volume2 size={13}/>
+                      <span>Sarvam Brief</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {activeTab==='dashboard'&&(dashboard?.trialConversionAlerts||[]).map((alert,index)=><div className="alert alert-error" style={{marginBottom:12}} key={`${alert.merchantName}-${index}`}><strong>Trial converts within 48 hours:</strong> {alert.merchantName||'A trial'} ends {new Date(alert.trialEndDate).toLocaleString()} {alert.expectedAmount?`and may charge ${money(alert.expectedAmount)}.`:'— review the renewal amount and cancel with the merchant if you do not want to continue.'}</div>)}
 
         {activeTab==='resolver' ? (
@@ -189,7 +344,7 @@ export default function App(){
               <div>
                 <span className="eyebrow">YOUR RECURRING COMMITMENTS</span>
                 <h2>The yearly cost of staying subscribed</h2>
-                <p>Based on recurring patterns in your statement history. Review the evidence before acting.</p>
+                <p>Protected by MandateShield intelligence and Sarvam AI Indic parsing. Review payment patterns before execution.</p>
               </div>
               <ReceiptText size={46} strokeWidth={1.3}/>
             </div>
@@ -220,9 +375,9 @@ export default function App(){
               <TransactionList items={recent} loading={loading} onDelete={removeTransaction} savingSkeleton={savingSkeleton}/>
             </section>
             <section className="transaction-panel">
-              <div className="panel-heading"><div><h2>Recurring payments</h2><p>Review repeated charges, price changes and cancellation options.</p></div><button className="btn btn-secondary btn-sm" onClick={async()=>{setLoading(true);try{await runPipeline();await load();setNotice('Payment review is up to date.');}catch{setNotice('Could not review payments right now.');}finally{setLoading(false);}}}>Review payments</button></div>
+              <div className="panel-heading"><div><h2>Recurring payments</h2><p>Review repeated charges, price changes, Sarvam briefings and direct mail cancellation.</p></div><button className="btn btn-secondary btn-sm" onClick={async()=>{setLoading(true);try{await runPipeline();await load();setNotice('Payment review is up to date.');}catch{setNotice('Could not review payments right now.');}finally{setLoading(false);}}}>Review payments</button></div>
               {(dashboard?.detectedAnomalies||[]).length>0&&<div className="anomaly-list">{dashboard.detectedAnomalies.map(a=><div className="anomaly-row" key={a.id}><span className={`severity-dot severity-${a.severity}`}/><div><strong>{a.type.replaceAll('_',' ')}</strong><span>{a.description}</span></div><strong>{a.financialImpact?money(a.financialImpact):''}</strong></div>)}</div>}
-              {((dashboard?.activeSubscriptions||[]).length+(dashboard?.tentativeSubscriptions||[]).length)===0?<div className="empty-state"><div className="empty-icon"><ReceiptText size={24}/></div><strong>No recurring payments spotted yet</strong><span>Add a few months of charges from the same service, then review your payments.</span></div>:<div className="recurring-list">{dashboard.activeSubscriptions.map(sub=><div className="recurring-row" key={sub.id}><div className="merchant-icon">{sub.merchantName?.slice(0,1)}</div><div className="transaction-primary"><strong>{sub.merchantName}</strong><span>{frequencyLabel(sub.frequency)} · {sub.paymentRail?.replaceAll('_',' ')} · {sub.detectionConfidence==null?'Confidence pending':`${Math.round(sub.detectionConfidence*100)}% confidence`}</span><small>{sub.detectionEvidence}</small></div><div className="commitment-cost"><strong className="transaction-amount">{money(sub.currentAmount)}</strong><small>~{money(sub.estimatedAnnualAmount)}/year</small></div><button className="btn btn-secondary btn-sm" onClick={()=>markUsed(sub)}>Confirm used recently</button><button className="btn btn-secondary btn-sm" onClick={()=>markUnused(sub)}>I stopped using it</button><button className="btn btn-secondary btn-sm" onClick={()=>openCancellation(sub)}>Cancellation steps</button></div>)}</div>}
+              {((dashboard?.activeSubscriptions||[]).length+(dashboard?.tentativeSubscriptions||[]).length)===0?<div className="empty-state"><div className="empty-icon"><ReceiptText size={24}/></div><strong>No recurring payments spotted yet</strong><span>Add a few months of charges from the same service, then review your payments.</span></div>:<div className="recurring-list">{dashboard.activeSubscriptions.map(sub=><div className="recurring-row" key={sub.id}><div className="merchant-icon">{sub.merchantName?.slice(0,1)}</div><div className="transaction-primary"><strong>{sub.merchantName}</strong><span>{frequencyLabel(sub.frequency)} · {sub.paymentRail?.replaceAll('_',' ')} · {sub.detectionConfidence==null?'Confidence pending':`${Math.round(sub.detectionConfidence*100)}% confidence`}</span><small>{sub.detectionEvidence}</small></div><div className="commitment-cost"><strong className="transaction-amount">{money(sub.currentAmount)}</strong><small>~{money(sub.estimatedAnnualAmount)}/year</small></div><button className="btn btn-secondary btn-sm" onClick={()=>playVoiceBriefing(sub.id)} title="Sarvam AI Hinglish Voice Briefing"><Volume2 size={14}/> Brief me</button><button className="btn btn-secondary btn-sm" onClick={()=>markUsed(sub)}>Used recently</button><button className="btn btn-secondary btn-sm" onClick={()=>markUnused(sub)}>Stopped using</button><button className="btn btn-secondary btn-sm" onClick={()=>openCancellation(sub)}>Direct Mail Revoke</button></div>)}</div>}
               {(dashboard?.tentativeSubscriptions||[]).length>0&&<div className="tentative-list"><h3>Possible recurring payments · check these</h3>{dashboard.tentativeSubscriptions.map(sub=><article className="tentative-row" key={sub.id}><div><strong>{sub.merchantName}</strong><span>{sub.detectionEvidence}</span><small>{sub.detectionConfidence==null?'Confidence pending':`${Math.round(sub.detectionConfidence*100)}% pattern confidence`} · {sub.paymentRail?.replaceAll('_',' ')}</small></div><strong>~{money(sub.estimatedAnnualAmount)}/year</strong></article>)}</div>}
             </section>
           </>
@@ -236,7 +391,58 @@ export default function App(){
     </main>
 
     {showForm&&<TransactionForm onSave={saveTransaction} onClose={()=>setShowForm(false)}/>}
-    {cancelTarget&&<div className="modal-backdrop"><section className="transaction-modal"><div className="modal-heading"><div><span className="eyebrow">{cancelTarget.merchantName}</span><h2>Cancellation options</h2></div><button className="btn btn-secondary btn-icon" onClick={()=>setCancelTarget(null)}><X size={18}/></button></div><div className="playbook-box"><strong>Steps through {cancelTarget.paymentRail?.replaceAll('_',' ')}</strong>{playbook?<><h3>{playbook.route}</h3><strong>Payment provider</strong><ol>{playbook.paymentSteps?.map((step,i)=><li key={`p${i}`}>{step}</li>)}</ol><strong>Merchant</strong><ol>{playbook.merchantSteps?.map((step,i)=><li key={`m${i}`}>{step}</li>)}</ol><strong>If charges continue</strong><ol>{playbook.ifItContinues?.map((step,i)=><li key={`e${i}`}>{step}</li>)}</ol><a href={playbook.sourceUrl} target="_blank" rel="noreferrer">Official guidance · checked {playbook.reviewedOn}</a></>:<p>Check your bank or provider’s current instructions before proceeding.</p>}<small>MandateShield cannot cancel a payment for you. Keep the provider’s confirmation and check the next statement.</small></div>{!letter?<form onSubmit={createLetter} className="transaction-form"><label className="form-group"><span className="form-label">Bank or payment provider</span><input required className="form-control" value={cancelForm.bankName} onChange={e=>setCancelForm({...cancelForm,bankName:e.target.value})} placeholder="e.g. HDFC Bank"/></label><label className="form-group"><span className="form-label">Mandate reference or descriptor</span><input required className="form-control" value={cancelForm.mandateRef} onChange={e=>setCancelForm({...cancelForm,mandateRef:e.target.value})} placeholder="Reference shown by your bank"/></label><div className="modal-actions"><button type="button" className="btn btn-secondary" onClick={()=>setCancelTarget(null)}>Close</button><button className="btn btn-primary" disabled={cancelBusy}>{cancelBusy?'Preparing…':'Prepare cancellation notice'}</button></div></form>:<><pre className="letter-preview">{letter}</pre><div className="modal-actions"><button className="btn btn-secondary" onClick={()=>navigator.clipboard.writeText(letter)}>Copy notice</button><button className="btn btn-primary" disabled={cancelBusy} onClick={markCancelled}>{cancelBusy?'Saving…':cancelRequested?'I have confirmation it stopped':'I submitted the cancellation request'}</button></div></>}</section></div>}
+    
+    {/* Sarvam AI Hinglish Voice Briefing Modal */}
+    {voiceBriefing&&(
+      <div className="modal-backdrop" onMouseDown={(e)=>e.target===e.currentTarget&&setVoiceBriefing(null)}>
+        <section className="transaction-modal" style={{maxWidth: 520}}>
+          <div className="modal-heading">
+            <div style={{display:'flex', alignItems:'center', gap: 10}}>
+              <div style={{width: 36, height: 36, borderRadius: '50%', background: 'rgba(56, 189, 248, 0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+                <Volume2 size={18} color="#38bdf8"/>
+              </div>
+              <div>
+                <span className="eyebrow">SARVAM AI HINGLISH VOICE BRIEFING</span>
+                <h2>{voiceBriefing.merchantName}</h2>
+              </div>
+            </div>
+            <button className="btn btn-secondary btn-icon" onClick={()=>setVoiceBriefing(null)}><X size={18}/></button>
+          </div>
+          <div style={{padding:'0 24px 20px'}}>
+            <div style={{
+              background: 'rgba(56, 189, 248, 0.08)',
+              border: '1px solid rgba(56, 189, 248, 0.25)',
+              borderRadius: 8,
+              padding: 16,
+              lineHeight: 1.7,
+              fontSize: 14,
+              color: '#f8fafc'
+            }}>
+              <p style={{margin:0, fontStyle:'italic'}}>"{voiceBriefing.transcript}"</p>
+            </div>
+            <div style={{display:'flex', justifyContent:'space-between', alignItems:'center', marginTop: 14}}>
+              <span style={{fontSize: 12, color:'var(--color-text-muted)'}}>
+                Language: {voiceBriefing.language} · Speaker: {voiceBriefing.speaker}
+              </span>
+              <button className="btn btn-primary btn-sm" onClick={()=>{
+                if(voiceBriefing.audioBase64){
+                  new Audio("data:audio/wav;base64," + voiceBriefing.audioBase64).play().catch(()=>{});
+                } else if ('speechSynthesis' in window) {
+                  const u = new SpeechSynthesisUtterance(voiceBriefing.transcript);
+                  u.lang = 'hi-IN';
+                  window.speechSynthesis.speak(u);
+                }
+              }}>
+                <Play size={14}/> Replay Audio
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
+    )}
+
+    {/* Direct Mail Cancellation Modal */}
+    {cancelTarget&&<div className="modal-backdrop"><section className="transaction-modal" style={{maxWidth: 600}}><div className="modal-heading"><div><span className="eyebrow">{cancelTarget.merchantName}</span><h2>Direct Mail Mandate Revocation</h2></div><button className="btn btn-secondary btn-icon" onClick={()=>setCancelTarget(null)}><X size={18}/></button></div><div className="playbook-box"><strong>Steps through {cancelTarget.paymentRail?.replaceAll('_',' ')}</strong>{playbook?<><h3>{playbook.route}</h3><strong>Payment provider</strong><ol>{playbook.paymentSteps?.map((step,i)=><li key={`p${i}`}>{step}</li>)}</ol><strong>Merchant</strong><ol>{playbook.merchantSteps?.map((step,i)=><li key={`m${i}`}>{step}</li>)}</ol><strong>If charges continue</strong><ol>{playbook.ifItContinues?.map((step,i)=><li key={`e${i}`}>{step}</li>)}</ol><a href={playbook.sourceUrl} target="_blank" rel="noreferrer">Official guidance · checked {playbook.reviewedOn}</a></>:<p>Check your bank or provider’s current instructions before proceeding.</p>}<small>MandateShield prepares direct revocation notices in compliance with RBI e-mandate rules.</small></div>{!letter?<form onSubmit={createDirectMail} className="transaction-form"><label className="form-group"><span className="form-label">Bank or payment provider</span><input required className="form-control" value={cancelForm.bankName} onChange={e=>setCancelForm({...cancelForm,bankName:e.target.value})} placeholder="e.g. HDFC Bank"/></label><label className="form-group"><span className="form-label">Mandate reference or URN</span><input required className="form-control" value={cancelForm.mandateRef} onChange={e=>setCancelForm({...cancelForm,mandateRef:e.target.value})} placeholder="Reference shown by your bank"/></label><label className="form-group"><span className="form-label">Recipient Desk Email (Optional)</span><input type="email" className="form-control" value={cancelForm.recipientEmail} onChange={e=>setCancelForm({...cancelForm,recipientEmail:e.target.value})} placeholder="Leave blank to auto-detect grievance desk"/></label><div className="modal-actions"><button type="button" className="btn btn-secondary" onClick={()=>setCancelTarget(null)}>Close</button><button className="btn btn-primary" disabled={cancelBusy}>{cancelBusy?'Preparing Direct Mail…':'Prepare Direct Revocation Mail'}</button></div></form>:<><div style={{background: 'rgba(56, 189, 248, 0.08)', border: '1px solid rgba(56, 189, 248, 0.25)', borderRadius: 8, padding: 12, marginBottom: 12, fontSize: 13}}><strong>Recipient:</strong> {directMailInfo?.recipientEmail}<br/><strong>Subject:</strong> {directMailInfo?.subject}</div><pre className="letter-preview">{letter}</pre><div className="modal-actions"><button className="btn btn-primary" onClick={launchMailClient}><Send size={15}/><span>Open in Mail Client (Direct Mail)</span><ExternalLink size={12}/></button><button className="btn btn-secondary" onClick={()=>navigator.clipboard.writeText(letter)}>Copy notice</button><button className="btn btn-secondary" disabled={cancelBusy} onClick={markCancelled}>{cancelBusy?'Saving…':cancelRequested?'Confirmation received':'Mark submitted'}</button></div></>}</section></div>}
   </div>;
 }
 

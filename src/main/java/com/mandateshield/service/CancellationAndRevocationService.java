@@ -2,8 +2,11 @@ package com.mandateshield.service;
 
 import org.springframework.stereotype.Service;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.util.List;
+import java.util.UUID;
 
 @Service
 public class CancellationAndRevocationService {
@@ -67,20 +70,76 @@ public class CancellationAndRevocationService {
     public String generateRevocationLetter(String userName, String bankName, String merchantName, String mandateRef) {
         return """
             To,
-            The Branch Manager, %s
+            The Branch Manager / Nodal Desk, %s
             
-            SUBJECT: NOTICE OF REVOCATION AND CANCELLATION OF MANDATE FOR %s
+            SUBJECT: MANDATE REVOCATION & CANCELLATION NOTICE FOR %s (REF: %s)
             
             Dear Sir/Madam,
             
             I, %s, hereby formally revoke and withdraw consent for the recurring payment mandate 
             registered under Reference/Descriptor: %s in favor of %s with immediate effect.
             
-            Please acknowledge this request in writing and confirm the mandate withdrawal and its effective date.
+            In accordance with RBI e-mandate circular instructions on customer opt-out and withdrawal of consent:
+            1. Please immediately stop and block all future debits associated with this mandate.
+            2. Acknowledge this revocation in writing or via electronic response with effective date.
             
             Date: %s
             Sincerely,
             %s
-            """.formatted(bankName, merchantName.toUpperCase(), userName, mandateRef, merchantName, LocalDate.now(), userName);
+            """.formatted(bankName, merchantName.toUpperCase(), mandateRef, userName, mandateRef, merchantName, LocalDate.now(), userName);
     }
+
+    public DirectMailPackage prepareDirectMail(String userName, String userEmail, String bankName, String merchantName, String mandateRef, String customRecipient) {
+        String recipient = (customRecipient != null && !customRecipient.isBlank()) ? customRecipient.trim() : resolveDeskEmail(bankName, merchantName);
+        String subject = "MANDATE REVOCATION NOTICE: %s [Ref: %s]".formatted(merchantName.toUpperCase(), mandateRef);
+        String body = generateRevocationLetter(userName, bankName, merchantName, mandateRef);
+        String trackingRef = "MS-REV-" + UUID.randomUUID().toString().substring(0, 8).toUpperCase();
+
+        String encodedSubject = URLEncoder.encode(subject, StandardCharsets.UTF_8).replace("+", "%20");
+        String encodedBody = URLEncoder.encode(body, StandardCharsets.UTF_8).replace("+", "%20");
+        String mailtoUri = "mailto:%s?subject=%s&body=%s".formatted(recipient, encodedSubject, encodedBody);
+
+        return new DirectMailPackage(
+                recipient,
+                bankName,
+                merchantName,
+                mandateRef,
+                subject,
+                body,
+                mailtoUri,
+                trackingRef,
+                LocalDate.now()
+        );
+    }
+
+    public String resolveDeskEmail(String bankName, String merchantName) {
+        String b = bankName != null ? bankName.toLowerCase() : "";
+        String m = merchantName != null ? merchantName.toLowerCase() : "";
+        if (b.contains("hdfc")) return "nodal.officer@hdfcbank.com";
+        if (b.contains("icici")) return "headservicequality@icicibank.com";
+        if (b.contains("sbi") || b.contains("state bank")) return "customercare@sbi.co.in";
+        if (b.contains("axis")) return "nodal.officer@axisbank.com";
+        if (b.contains("kotak")) return "nodalofficer@kotak.com";
+        if (b.contains("pnb") || b.contains("punjab national")) return "care@pnb.co.in";
+        if (b.contains("paytm")) return "care@paytm.com";
+        if (m.contains("netflix")) return "grievance-india@netflix.com";
+        if (m.contains("spotify")) return "support@spotify.com";
+        if (m.contains("hotstar") || m.contains("disney")) return "disneyplus.in@hotstar.com";
+        if (m.contains("prime") || m.contains("amazon")) return "grievance-officer@amazon.in";
+        if (m.contains("swiggy")) return "support@swiggy.in";
+        if (m.contains("zomato")) return "order@zomato.com";
+        return "nodal.officer@" + (bankName.toLowerCase().replaceAll("[^a-z0-9]", "") + ".com");
+    }
+
+    public record DirectMailPackage(
+            String recipientEmail,
+            String bankName,
+            String merchantName,
+            String mandateRef,
+            String subject,
+            String body,
+            String mailtoUri,
+            String trackingRef,
+            LocalDate generatedDate
+    ) {}
 }

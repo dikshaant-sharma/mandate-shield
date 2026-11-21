@@ -46,67 +46,114 @@ public class MandateShieldPipelineService {
         return CompletableFuture.completedFuture(processUserNow(userId));
     }
 
-    /** Runs the same user-scoped pipeline on a caller-managed background thread. */
+    /** Runs the same user-scoped pipeline with batched in-memory scale optimizations. */
     public PipelineRunResult processUserNow(Long userId) {
         UserDocument user = userRepository.findById(userId)
                 .orElseThrow(() -> new NoSuchElementException("User " + userId + " was not found"));
         List<RawTransactionDocument> transactions = transactionRepository.findByUserId(userId);
         if (transactions.isEmpty()) return new PipelineRunResult(userId, 0, 0, 0);
 
+        List<RawTransactionDocument> dirtyTransactions = new ArrayList<>();
         for (RawTransactionDocument tx : transactions) {
             if (tx.getRawDescriptor() == null || tx.getRawDescriptor().isBlank()) continue;
             MerchantResolverEngine.ResolveResult result = resolverEngine.resolveExisting(tx);
-            // A low-confidence descriptor is being enriched in the background; don't save a stale snapshot.
             if ("UNKNOWN".equalsIgnoreCase(result.brandName()) && result.confidenceScore() <= 0.50) continue;
+
+            boolean dirty = false;
             if (result.brandName() != null && !result.brandName().isBlank()
-                    && !"UNKNOWN".equalsIgnoreCase(result.brandName())) {
+                    && !"UNKNOWN".equalsIgnoreCase(result.brandName())
+                    && !result.brandName().equals(tx.getResolvedMerchantName())) {
                 tx.setResolvedMerchantName(result.brandName());
+                dirty = true;
             }
             if ((tx.getResolvedCategory() == null || tx.getResolvedCategory().isBlank()
                     || "Uncategorized".equalsIgnoreCase(tx.getResolvedCategory()))
                     && result.category() != null && !result.category().isBlank()) {
                 tx.setResolvedCategory(result.category());
+                dirty = true;
             }
-            // The user or raw import may provide a more reliable payment rail than descriptor heuristics.
             if ((tx.getPaymentRail() == null || tx.getPaymentRail().isBlank()
                     || "OTHER".equalsIgnoreCase(tx.getPaymentRail()) || "UNKNOWN".equalsIgnoreCase(tx.getPaymentRail()))
                     && result.gateway() != null && !"UNKNOWN".equalsIgnoreCase(result.gateway())) {
                 tx.setPaymentRail(result.gateway());
+                dirty = true;
             }
-            tx.setConfidenceScore(result.confidenceScore());
-            tx.setResolutionTier(result.resolutionTier());
-            transactionRepository.save(tx);
+            if (tx.getConfidenceScore() == null || Math.abs(tx.getConfidenceScore() - result.confidenceScore()) > 0.001) {
+                tx.setConfidenceScore(result.confidenceScore());
+                dirty = true;
+            }
+            if (tx.getResolutionTier() != result.resolutionTier()) {
+                tx.setResolutionTier(result.resolutionTier());
+                dirty = true;
+            }
+            if (dirty) {
+                dirtyTransactions.add(tx);
+            }
+        }
+
+        // Batch save dirty transactions in chunks of 200
+        if (!dirtyTransactions.isEmpty()) {
+            for (int i = 0; i < dirtyTransactions.size(); i += 200) {
+                int end = Math.min(i + 200, dirtyTransactions.size());
+                transactionRepository.saveAll(dirtyTransactions.subList(i, end));
+            }
         }
 
         Map<String, List<RawTransactionDocument>> grouped = transactions.stream()
                 .filter(tx -> tx.getResolvedMerchantName() != null && !tx.getResolvedMerchantName().isBlank()
                         && !"UNKNOWN".equalsIgnoreCase(tx.getResolvedMerchantName()))
                 .collect(Collectors.groupingBy(RawTransactionDocument::getResolvedMerchantName));
-        int discovered = 0;
-        int anomalyCount = 0;
+
+        // Single query for all existing subscriptions to avoid N+1 queries
+        Map<String, SubscriptionDocument> existingSubs = subscriptionRepository.findByUserId(userId).stream()
+                .collect(Collectors.toMap(
+                        s -> s.getMerchantName() != null ? s.getMerchantName().toUpperCase(Locale.ROOT) : "",
+                        s -> s,
+                        (s1, s2) -> s1
+                ));
+
+        List<SubscriptionDocument> toSaveSubscriptions = new ArrayList<>();
+        Map<String, List<RawTransactionDocument>> merchantTxMap = new HashMap<>();
+
         for (var entry : grouped.entrySet()) {
             SubscriptionDocument candidate = discoveryEngine.discover(userId, entry.getKey(), entry.getValue(), null);
             if (candidate == null) continue;
-            SubscriptionDocument existing = subscriptionRepository.findByUserIdAndMerchantName(userId, entry.getKey()).orElse(null);
+            SubscriptionDocument existing = existingSubs.get(entry.getKey().toUpperCase(Locale.ROOT));
             if (existing != null) {
                 candidate.setId(existing.getId());
-                // A pipeline refresh must retain explicit user feedback attached to this commitment.
                 candidate.setUserReportedUnused(existing.getUserReportedUnused());
                 candidate.setLastUserActivityDate(existing.getLastUserActivityDate());
                 candidate.setFirstDetectedAt(existing.getFirstDetectedAt() == null ? candidate.getFirstDetectedAt() : existing.getFirstDetectedAt());
                 if (existing.getStatus() == SubscriptionStatus.CANCELLED
-                        || existing.getStatus() == SubscriptionStatus.CANCELLATION_REQUESTED) candidate.setStatus(existing.getStatus());
+                        || existing.getStatus() == SubscriptionStatus.CANCELLATION_REQUESTED) {
+                    candidate.setStatus(existing.getStatus());
+                }
             }
-            SubscriptionDocument saved = subscriptionRepository.save(candidate);
-            discovered++;
+            toSaveSubscriptions.add(candidate);
+            merchantTxMap.put(candidate.getMerchantName(), entry.getValue());
+        }
+
+        List<SubscriptionDocument> savedSubscriptions = subscriptionRepository.saveAll(toSaveSubscriptions);
+        int discovered = savedSubscriptions.size();
+        int anomalyCount = 0;
+
+        List<AnomalyDocument> allAnomalies = new ArrayList<>();
+        for (SubscriptionDocument saved : savedSubscriptions) {
             anomalyRepository.deleteBySubscriptionId(saved.getId());
-            List<AnomalyDocument> anomalies = anomalyDetectionEngine.detectAnomalies(saved, entry.getValue());
-            if (!anomalies.isEmpty()) {
-                anomalyRepository.saveAll(anomalies);
-                anomalyCount += anomalies.size();
+            List<RawTransactionDocument> txList = merchantTxMap.get(saved.getMerchantName());
+            if (txList != null) {
+                List<AnomalyDocument> anomalies = anomalyDetectionEngine.detectAnomalies(saved, txList);
+                allAnomalies.addAll(anomalies);
             }
         }
-        log.info("Pipeline processed user {}: {} transactions, {} subscriptions, {} anomalies", userId, transactions.size(), discovered, anomalyCount);
+
+        if (!allAnomalies.isEmpty()) {
+            anomalyRepository.saveAll(allAnomalies);
+            anomalyCount = allAnomalies.size();
+        }
+
+        log.info("Batched pipeline processed user {}: {} transactions, {} subscriptions, {} anomalies",
+                userId, transactions.size(), discovered, anomalyCount);
         return new PipelineRunResult(userId, transactions.size(), discovered, anomalyCount);
     }
 

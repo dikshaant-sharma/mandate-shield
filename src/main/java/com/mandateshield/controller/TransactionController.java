@@ -95,7 +95,67 @@ public class TransactionController {
             @Valid @RequestBody java.util.List<@Valid CreateTransaction> requests) {
         if (requests == null || requests.isEmpty() || requests.size() > 500)
             throw new IllegalArgumentException("Import between 1 and 500 transactions at a time.");
-        return requests.stream().map(request -> create(userId, request)).toList();
+
+        java.util.Map<String, MerchantResolverEngine.ResolveResult> descriptorCache = new java.util.HashMap<>();
+        java.util.List<RawTransactionDocument> toSave = new java.util.ArrayList<>(requests.size());
+
+        for (CreateTransaction request : requests) {
+            String descriptor = request.rawDescriptor() == null ? "" : request.rawDescriptor().trim();
+            if (descriptor.isBlank()) continue;
+            BigDecimal amount = parseAmount(request.amount());
+            boolean trialTransaction = Boolean.TRUE.equals(request.trialTransaction());
+            if (amount.signum() < 0 || (amount.signum() == 0 && !trialTransaction)) continue;
+
+            Instant transactionDate = parseDate(request.transactionDate());
+            String currency = request.currency() == null || request.currency().isBlank() ? "INR" : request.currency().trim().toUpperCase();
+            if (!currency.matches("[A-Z]{3}")) currency = "INR";
+
+            RawTransactionDocument candidate = RawTransactionDocument.builder().userId(userId).rawDescriptor(descriptor)
+                    .amount(amount).currency(currency).transactionDate(transactionDate)
+                    .paymentRail(request.paymentRail() == null || request.paymentRail().isBlank() ? "OTHER" : request.paymentRail().trim().toUpperCase())
+                    .resolvedMerchantName(descriptor).resolvedCategory(request.category()).build();
+
+            boolean suppliedMerchant = request.merchantName() != null && !request.merchantName().isBlank();
+            MerchantResolverEngine.ResolveResult result;
+            if (suppliedMerchant) {
+                result = new MerchantResolverEngine.ResolveResult(request.merchantName().trim().toUpperCase(),
+                        request.category() == null ? "Uncategorized" : request.category(), null, 0.99,
+                        com.mandateshield.domain.ResolutionTier.TIER_1, null);
+            } else {
+                result = descriptorCache.computeIfAbsent(descriptor, d -> resolver.resolveExisting(candidate));
+            }
+
+            candidate.setResolvedMerchantName(result.brandName() == null || result.brandName().isBlank() ? "UNKNOWN" : result.brandName());
+            if (request.category() == null || request.category().isBlank()) candidate.setResolvedCategory(result.category());
+            if ("OTHER".equals(candidate.getPaymentRail()) && result.gateway() != null) candidate.setPaymentRail(result.gateway());
+            candidate.setConfidenceScore(result.confidenceScore());
+            candidate.setResolutionTier(result.resolutionTier());
+            candidate.setTrialTransaction(trialTransaction);
+            if (trialTransaction && request.trialEndDate() != null && !request.trialEndDate().isBlank()) {
+                candidate.setTrialEndDate(parseDateText(request.trialEndDate()));
+                candidate.setTrialConversionAmount(request.trialConversionAmount() == null || request.trialConversionAmount().isNull()
+                        || request.trialConversionAmount().asText().isBlank() ? null : parseAmount(request.trialConversionAmount()));
+            }
+            toSave.add(candidate);
+        }
+
+        if (toSave.isEmpty()) return java.util.List.of();
+
+        java.util.List<RawTransactionDocument> saved = transactions.saveAll(toSave);
+
+        // One post-batch synchronization pass for distinct descriptors
+        java.util.Set<String> distinctDescriptors = new java.util.HashSet<>();
+        for (RawTransactionDocument tx : saved) {
+            String desc = tx.getRawDescriptor();
+            if (distinctDescriptors.add(desc)) {
+                String brand = tx.getResolvedMerchantName();
+                if (brand != null && !"UNKNOWN".equalsIgnoreCase(brand) && tx.getResolutionTier() == com.mandateshield.domain.ResolutionTier.TIER_1) {
+                    geminiEnrichment.synchronizeKnownTierOne(userId, desc, brand, tx.getConfidenceScore() != null ? tx.getConfidenceScore() : 0.95);
+                }
+            }
+        }
+
+        return saved.stream().map(TransactionView::from).toList();
     }
 
     private BigDecimal parseAmount(JsonNode node) {

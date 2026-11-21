@@ -30,6 +30,7 @@ public class SubscriptionDocument {
     private SubscriptionStatus status;
     private String paymentRail;
     private Instant lastPaymentDate;
+    private Instant nextChargeDate;
     private Instant lastUserActivityDate;
     private Instant firstDetectedAt;
     private Double detectionConfidence;

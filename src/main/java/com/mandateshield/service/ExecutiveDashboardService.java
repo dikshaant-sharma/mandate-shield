@@ -12,11 +12,14 @@ import com.mandateshield.repository.SubscriptionRepository;
 import com.mandateshield.repository.RawTransactionRepository;
 import com.mandateshield.domain.RawTransactionDocument;
 import com.mandateshield.dto.TrialConversionAlert;
+import com.mandateshield.dto.UpcomingDebitAlert;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
+import java.util.Comparator;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -40,6 +43,32 @@ public class ExecutiveDashboardService {
                         && !tx.getTrialEndDate().isBefore(now) && !tx.getTrialEndDate().isAfter(now.plusSeconds(48 * 3600L)))
                 .map(tx -> new TrialConversionAlert(tx.getResolvedMerchantName(), tx.getTrialEndDate(), tx.getTrialConversionAmount()))
                 .toList();
+
+        var upcomingDebitAlerts = active.stream()
+                .filter(s -> s.getNextChargeDate() != null)
+                .filter(s -> !s.getNextChargeDate().isBefore(now) && !s.getNextChargeDate().isAfter(now.plusSeconds(48 * 3600L)))
+                .map(s -> {
+                    long hours = Duration.between(now, s.getNextChargeDate()).toHours();
+                    boolean within24 = hours <= 24;
+                    String notice = within24
+                            ? "RBI Mandate Rule: Mandatory pre-debit alert (<24h remaining). Revoke consent now to stop this charge."
+                            : "RBI Mandate Rule: Pre-debit alert scheduled within 24-48 hours. Review details before charge.";
+                    return new UpcomingDebitAlert(
+                            s.getId(),
+                            s.getMerchantName(),
+                            s.getCategory(),
+                            s.getCurrentAmount(),
+                            "INR",
+                            s.getPaymentRail(),
+                            s.getNextChargeDate(),
+                            Math.max(0, hours),
+                            within24,
+                            notice
+                    );
+                })
+                .sorted(Comparator.comparing(UpcomingDebitAlert::scheduledDebitDate))
+                .toList();
+
         BigDecimal monthlySpend = active.stream().map(this::monthlyAmount).reduce(BigDecimal.ZERO, BigDecimal::add);
         BigDecimal estimatedAnnualSpend = monthlySpend.multiply(TWELVE);
         Set<String> activeIds = active.stream().map(SubscriptionDocument::getId).collect(Collectors.toSet());
@@ -51,7 +80,9 @@ public class ExecutiveDashboardService {
                 annualizedWaste, annualizedWaste, estimatedAnnualSpend,
                 active.stream().map(SubscriptionDto::from).toList(),
                 anomalies.stream().map(AnomalyDto::from).toList(),
-                tentative.stream().map(SubscriptionDto::from).toList(), trialAlerts);
+                tentative.stream().map(SubscriptionDto::from).toList(),
+                trialAlerts,
+                upcomingDebitAlerts);
     }
 
     private BigDecimal monthlyAmount(SubscriptionDocument subscription) {

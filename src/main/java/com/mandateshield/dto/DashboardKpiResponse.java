@@ -14,5 +14,6 @@ public record DashboardKpiResponse(
         List<SubscriptionDto> activeSubscriptions,
         List<AnomalyDto> detectedAnomalies,
         List<SubscriptionDto> tentativeSubscriptions,
-        List<TrialConversionAlert> trialConversionAlerts
+        List<TrialConversionAlert> trialConversionAlerts,
+        List<UpcomingDebitAlert> upcomingDebitAlerts
 ) {}

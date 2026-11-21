@@ -170,4 +170,37 @@ class DescriptorMatchingAndFeaturesTest {
         assertEquals(0.95, result.confidenceScore());
         assertEquals("GEMINI_LLM", result.matchedPattern());
     }
+
+    @Test
+    @DisplayName("Tier 3: Sarvam AI Fallback resolves unknown descriptor and returns TIER_3 with SARVAM_AI")
+    void testTier3SarvamAiFallback() {
+        MerchantPatternRepository patternRepo = Mockito.mock(MerchantPatternRepository.class);
+        RawTransactionRepository txRepo = Mockito.mock(RawTransactionRepository.class);
+        SharedMerchantKnowledgeService sharedKnowledge = Mockito.mock(SharedMerchantKnowledgeService.class);
+        PineconeMerchantVectorService pinecone = Mockito.mock(PineconeMerchantVectorService.class);
+        SarvamAiService sarvamService = Mockito.mock(SarvamAiService.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<SarvamAiService> sarvamProvider = Mockito.mock(ObjectProvider.class);
+        @SuppressWarnings("unchecked")
+        ObjectProvider<GeminiMerchantEnrichmentService> geminiProvider = Mockito.mock(ObjectProvider.class);
+
+        when(sarvamProvider.getIfAvailable()).thenReturn(sarvamService);
+        when(sarvamService.resolveDescriptor("UNKNOWN_INDIAN_MANDATE")).thenReturn("SWIGGY");
+
+        HeuristicExtractionEngine heuristic = createEngine();
+
+        when(sharedKnowledge.find(any())).thenReturn(Optional.empty());
+        when(patternRepo.findAll()).thenReturn(List.of());
+        when(pinecone.find(any())).thenReturn(null);
+
+        MerchantResolverEngine resolver = new MerchantResolverEngine(
+                patternRepo, txRepo, heuristic, sharedKnowledge, pinecone, sarvamProvider, geminiProvider
+        );
+
+        var result = resolver.resolve("UNKNOWN_INDIAN_MANDATE", 101L, BigDecimal.valueOf(149), "INR", Instant.now());
+        assertEquals(ResolutionTier.TIER_3, result.resolutionTier());
+        assertEquals("SWIGGY", result.brandName());
+        assertEquals(0.95, result.confidenceScore());
+        assertEquals("SARVAM_AI", result.matchedPattern());
+    }
 }

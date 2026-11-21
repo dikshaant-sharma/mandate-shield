@@ -60,6 +60,11 @@ springdoc:
     operations-sorter: method
 
 mandateshield:
+  sarvam:
+    api-key: ${SARVAM_API_KEY:}
+    base-url: ${SARVAM_BASE_URL:https://api.sarvam.ai}
+    chat-model: ${SARVAM_CHAT_MODEL:sarvam-105b}
+    tts-speaker: ${SARVAM_TTS_SPEAKER:meera}
   pinecone:
     api-key: ${PINECONE_API_KEY:}
     index-name: ${PINECONE_INDEX_NAME:mandateshield-merchants}

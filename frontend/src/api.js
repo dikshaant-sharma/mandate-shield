@@ -1,7 +1,10 @@
 import axios from 'axios';
 
-// Directly hardcoded backend root for Render (https://mandate-shield.onrender.com)
-const BACKEND_ROOT = 'https://mandate-shield.onrender.com';
+// Environment-aware backend root: relative on localhost for Vite proxy, or env/render URL
+const BACKEND_ROOT = import.meta.env.VITE_API_URL || 
+  (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? '' 
+    : 'https://mandate-shield.onrender.com');
 
 const api = axios.create({
   baseURL: `${BACKEND_ROOT}/api/v1`,
@@ -10,6 +13,7 @@ const api = axios.create({
   },
   timeout: 45000
 });
+
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('mandateshield_token');
   if (token) config.headers.Authorization = `Bearer ${token}`;
@@ -30,6 +34,7 @@ export const listPatterns = () => api.get('/resolver/patterns').then(r => r.data
 export const clearPatternCache = () => api.post('/resolver/patterns/cache/clear').then(r => r.data);
 export const getPlaybook = (rail, merchant) => api.get('/cancellation/playbook', { params: { rail, merchant } }).then(r => r.data);
 export const generateLetter = (payload) => api.post('/cancellation/generate-letter', payload).then(r => r.data);
+export const sendDirectMail = (payload) => api.post('/cancellation/direct-mail', payload).then(r => r.data);
 export const revokeSubscription = (id) => api.post(`/cancellation/${id}/revoke`).then(r => r.data);
 export const requestCancellation = (id) => api.post(`/cancellation/${id}/request`).then(r => r.data);
 export const confirmCancellation = (id) => api.post(`/cancellation/${id}/confirm`).then(r => r.data);
@@ -37,4 +42,8 @@ export const reportUnused = (id) => api.post(`/cancellation/${id}/report-unused`
 export const confirmSubscriptionActivity = (id) => api.post(`/cancellation/${id}/confirm-activity`).then(r => r.data);
 export const seedSyntheticHistory = () => api.post('/demo/seed').then(r => r.data);
 export const fetchSyntheticEvaluation = () => api.get('/demo/evaluation').then(r => r.data);
+export const fetchUpcomingDebits = () => api.get('/notifications/upcoming-debits').then(r => r.data);
+export const fetchVoiceBriefing = (subscriptionId) => api.get(`/voice/brief/${subscriptionId}`).then(r => r.data);
+export const fetchVoiceSummary = () => api.get('/voice/summary').then(r => r.data);
+
 export default api;

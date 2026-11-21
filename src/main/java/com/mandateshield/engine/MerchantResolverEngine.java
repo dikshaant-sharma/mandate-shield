@@ -6,6 +6,7 @@ import com.mandateshield.domain.ResolutionTier;
 import com.mandateshield.repository.MerchantPatternRepository;
 import com.mandateshield.repository.RawTransactionRepository;
 import com.mandateshield.service.GeminiMerchantEnrichmentService;
+import com.mandateshield.service.SarvamAiService;
 import com.mandateshield.service.SharedMerchantKnowledgeService;
 import com.mandateshield.service.PineconeMerchantVectorService;
 import lombok.extern.slf4j.Slf4j;
@@ -28,7 +29,7 @@ import java.util.regex.Pattern;
  * <p>
  * Layer 1 (Tier 1): fast regex lookup against stored patterns and shared knowledge.
  * Layer 2 (Tier 2): Pinecone vector similarity search & heuristic extraction with single-letter normalization and fuzzy matching.
- * Layer 3 (Tier 3): Google Gemini LLM fallback for low-confidence or obfuscated descriptors.
+ * Layer 3 (Tier 3): Sarvam AI / LLM fallback for low-confidence or obfuscated descriptors.
  */
 @Service
 @Slf4j
@@ -39,6 +40,7 @@ public class MerchantResolverEngine {
     private final HeuristicExtractionEngine heuristicEngine;
     private final SharedMerchantKnowledgeService sharedKnowledge;
     private final PineconeMerchantVectorService pinecone;
+    private final ObjectProvider<SarvamAiService> sarvamProvider;
     private final ObjectProvider<GeminiMerchantEnrichmentService> geminiProvider;
 
     /** Cache of compiled regex patterns to avoid recompilation on every request. */
@@ -52,13 +54,24 @@ public class MerchantResolverEngine {
                                   HeuristicExtractionEngine heuristicEngine,
                                   SharedMerchantKnowledgeService sharedKnowledge,
                                   PineconeMerchantVectorService pinecone,
+                                  ObjectProvider<SarvamAiService> sarvamProvider,
                                   ObjectProvider<GeminiMerchantEnrichmentService> geminiProvider) {
         this.patternRepo = patternRepo;
         this.transactionRepo = transactionRepo;
         this.heuristicEngine = heuristicEngine;
         this.sharedKnowledge = sharedKnowledge;
         this.pinecone = pinecone;
+        this.sarvamProvider = sarvamProvider;
         this.geminiProvider = geminiProvider;
+    }
+
+    public MerchantResolverEngine(MerchantPatternRepository patternRepo,
+                                  RawTransactionRepository transactionRepo,
+                                  HeuristicExtractionEngine heuristicEngine,
+                                  SharedMerchantKnowledgeService sharedKnowledge,
+                                  PineconeMerchantVectorService pinecone,
+                                  ObjectProvider<GeminiMerchantEnrichmentService> geminiProvider) {
+        this(patternRepo, transactionRepo, heuristicEngine, sharedKnowledge, pinecone, null, geminiProvider);
     }
 
     /**
@@ -119,23 +132,34 @@ public class MerchantResolverEngine {
         }
 
         // ------------------------------------------------------------------
-        // Layer 3 (Tier 3) – Google Gemini LLM fallback
+        // Layer 3 (Tier 3) – Sarvam AI / LLM fallback
         // ------------------------------------------------------------------
-        log.info("No Tier 1/2 match found, invoking Layer 3 Gemini LLM for '{}'", rawDescriptor);
-        GeminiMerchantEnrichmentService gemini = geminiProvider.getIfAvailable();
-        if (gemini != null) {
-            String geminiBrand = gemini.resolveSynchronous(rawDescriptor);
-            if (geminiBrand != null && !"UNKNOWN".equalsIgnoreCase(geminiBrand)) {
-                String category = heuristicEngine.getBrandCategoryMap().getOrDefault(geminiBrand, "Uncategorized");
-                double confidence = 0.95;
-                log.info("Layer 3 (Tier 3) Gemini LLM match for '{}' -> brand='{}'", rawDescriptor, geminiBrand);
-                saveRawTransaction(userId, rawDescriptor, amount, currency, transactionDate,
-                        geminiBrand, category, confidence, ResolutionTier.TIER_3);
-                pinecone.remember(rawDescriptor, geminiBrand, category);
-                asyncWriteBackPattern(userId, rawDescriptor, geminiBrand, category);
-                return new ResolveResult(geminiBrand, category, extractGateway(rawDescriptor),
-                        confidence, ResolutionTier.TIER_3, "GEMINI_LLM");
+        log.info("No Tier 1/2 match found, invoking Layer 3 Sarvam AI for '{}'", rawDescriptor);
+        String resolvedBrand = null;
+        String matchedSource = "SARVAM_AI";
+        SarvamAiService sarvam = sarvamProvider != null ? sarvamProvider.getIfAvailable() : null;
+        if (sarvam != null) {
+            resolvedBrand = sarvam.resolveDescriptor(rawDescriptor);
+        }
+        if (resolvedBrand == null || "UNKNOWN".equalsIgnoreCase(resolvedBrand)) {
+            GeminiMerchantEnrichmentService gemini = geminiProvider != null ? geminiProvider.getIfAvailable() : null;
+            if (gemini != null) {
+                resolvedBrand = gemini.resolveSynchronous(rawDescriptor);
+                if (resolvedBrand != null && !"UNKNOWN".equalsIgnoreCase(resolvedBrand)) {
+                    matchedSource = "GEMINI_LLM";
+                }
             }
+        }
+        if (resolvedBrand != null && !"UNKNOWN".equalsIgnoreCase(resolvedBrand)) {
+            String category = heuristicEngine.getBrandCategoryMap().getOrDefault(resolvedBrand, "Uncategorized");
+            double confidence = 0.95;
+            log.info("Layer 3 (Tier 3) {} match for '{}' -> brand='{}'", matchedSource, rawDescriptor, resolvedBrand);
+            saveRawTransaction(userId, rawDescriptor, amount, currency, transactionDate,
+                    resolvedBrand, category, confidence, ResolutionTier.TIER_3);
+            pinecone.remember(rawDescriptor, resolvedBrand, category);
+            asyncWriteBackPattern(userId, rawDescriptor, resolvedBrand, category);
+            return new ResolveResult(resolvedBrand, category, extractGateway(rawDescriptor),
+                    confidence, ResolutionTier.TIER_3, matchedSource);
         }
 
         // ------------------------------------------------------------------
@@ -182,17 +206,28 @@ public class MerchantResolverEngine {
                     result.confidenceScore(), result.resolutionTier(), "HEURISTIC_RULE");
         }
 
-        // Layer 3 (Tier 3) Gemini LLM
-        GeminiMerchantEnrichmentService gemini = geminiProvider.getIfAvailable();
-        if (gemini != null) {
-            String geminiBrand = gemini.resolveSynchronous(descriptor);
-            if (geminiBrand != null && !"UNKNOWN".equalsIgnoreCase(geminiBrand)) {
-                String category = heuristicEngine.getBrandCategoryMap().getOrDefault(geminiBrand, "Uncategorized");
-                pinecone.remember(descriptor, geminiBrand, category);
-                asyncWriteBackPattern(transaction.getUserId(), descriptor, geminiBrand, category);
-                return new ResolveResult(geminiBrand, category, extractGateway(descriptor),
-                        0.95, ResolutionTier.TIER_3, "GEMINI_LLM");
+        // Layer 3 (Tier 3) Sarvam AI / LLM
+        String resolvedBrand = null;
+        String matchedSource = "SARVAM_AI";
+        SarvamAiService sarvam = sarvamProvider != null ? sarvamProvider.getIfAvailable() : null;
+        if (sarvam != null) {
+            resolvedBrand = sarvam.resolveDescriptor(descriptor);
+        }
+        if (resolvedBrand == null || "UNKNOWN".equalsIgnoreCase(resolvedBrand)) {
+            GeminiMerchantEnrichmentService gemini = geminiProvider != null ? geminiProvider.getIfAvailable() : null;
+            if (gemini != null) {
+                resolvedBrand = gemini.resolveSynchronous(descriptor);
+                if (resolvedBrand != null && !"UNKNOWN".equalsIgnoreCase(resolvedBrand)) {
+                    matchedSource = "GEMINI_LLM";
+                }
             }
+        }
+        if (resolvedBrand != null && !"UNKNOWN".equalsIgnoreCase(resolvedBrand)) {
+            String category = heuristicEngine.getBrandCategoryMap().getOrDefault(resolvedBrand, "Uncategorized");
+            pinecone.remember(descriptor, resolvedBrand, category);
+            asyncWriteBackPattern(transaction.getUserId(), descriptor, resolvedBrand, category);
+            return new ResolveResult(resolvedBrand, category, extractGateway(descriptor),
+                    0.95, ResolutionTier.TIER_3, matchedSource);
         }
 
         return new ResolveResult(result.brandName(), result.category(), result.gateway(),

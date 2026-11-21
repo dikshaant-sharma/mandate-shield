@@ -5,10 +5,39 @@ import {
   Check, 
   Download, 
   Printer, 
-  BookOpen
+  BookOpen,
+  Mail,
+  Send,
+  ShieldCheck,
+  ExternalLink
 } from 'lucide-react';
-import { getPlaybook, generateLetter } from '../api';
+import { getPlaybook, generateLetter, sendDirectMail } from '../api';
 import { SAMPLE_REVOCATION_PRESETS } from '../data/sampleData';
+
+const BANK_DESK_EMAILS = {
+  'hdfc': 'nodal.officer@hdfcbank.com',
+  'icici': 'headservicequality@icicibank.com',
+  'sbi': 'customercare@sbi.co.in',
+  'axis': 'nodal.officer@axisbank.com',
+  'kotak': 'nodalofficer@kotak.com',
+  'pnb': 'care@pnb.co.in',
+  'paytm': 'care@paytm.com',
+  'netflix': 'grievance-india@netflix.com',
+  'spotify': 'support@spotify.com',
+  'amazon': 'grievance-officer@amazon.in',
+  'hotstar': 'disneyplus.in@hotstar.com',
+  'swiggy': 'support@swiggy.in',
+  'zomato': 'order@zomato.com'
+};
+
+function guessDeskEmail(bankName, merchantName) {
+  const b = (bankName || '').toLowerCase();
+  const m = (merchantName || '').toLowerCase();
+  for (const [key, email] of Object.entries(BANK_DESK_EMAILS)) {
+    if (b.includes(key) || m.includes(key)) return email;
+  }
+  return 'nodal.officer@' + (bankName || 'bank').toLowerCase().replace(/[^a-z0-9]/g, '') + '.com';
+}
 
 export default function CancellationStudio({ activeUser, isDemoMode, initialData }) {
   // Playbook state
@@ -16,53 +45,90 @@ export default function CancellationStudio({ activeUser, isDemoMode, initialData
   const [playbookContent, setPlaybookContent] = useState('');
 
   // Notice generator form state
-  const [userName, setUserName] = useState(initialData?.userName || activeUser.name);
+  const [userName, setUserName] = useState(initialData?.userName || activeUser?.name || 'Account Holder');
   const [bankName, setBankName] = useState(initialData?.bankName || 'HDFC Bank');
   const [merchantName, setMerchantName] = useState(initialData?.merchantName || 'Adobe Creative Cloud');
   const [mandateRef, setMandateRef] = useState(initialData?.mandateRef || 'MND-HDFC-99281-ADOBE');
+  const [recipientEmail, setRecipientEmail] = useState(() => guessDeskEmail('HDFC Bank', 'Adobe Creative Cloud'));
   
   const [generatedLetter, setGeneratedLetter] = useState('');
+  const [directMailData, setDirectMailData] = useState(null);
   const [letterError, setLetterError] = useState('');
   const [generating, setGenerating] = useState(false);
+  const [sendingMail, setSendingMail] = useState(false);
+  const [mailSentNotice, setMailSentNotice] = useState('');
   const [copied, setCopied] = useState(false);
+
+  // Update recipient email whenever bank or merchant changes
+  useEffect(() => {
+    setRecipientEmail(guessDeskEmail(bankName, merchantName));
+  }, [bankName, merchantName]);
 
   const handleGenerateLetter = useCallback(async () => {
     setGenerating(true);
     setLetterError('');
+    setMailSentNotice('');
     try {
       if (!isDemoMode) {
-        const res = await generateLetter({
+        const mailRes = await sendDirectMail({
           bankName: bankName || 'Bank',
           merchantName: merchantName || 'Merchant',
-          mandateRef: mandateRef || 'REF-DEFAULT'
+          mandateRef: mandateRef || 'REF-DEFAULT',
+          recipientEmail: recipientEmail
         });
-        setGeneratedLetter(res.letter);
+        setDirectMailData(mailRes);
+        setGeneratedLetter(mailRes.body);
       } else {
         await new Promise(r => setTimeout(r, 150));
         const today = new Date().toISOString().split('T')[0];
-        setGeneratedLetter(`To,
-The Branch Manager, ${bankName || 'Bank'}
+        const bodyText = `To,
+The Branch Manager / Nodal Desk, ${bankName || 'Bank'}
 
-SUBJECT: NOTICE OF REVOCATION AND CANCELLATION OF MANDATE FOR ${merchantName.toUpperCase()}
+SUBJECT: MANDATE REVOCATION & CANCELLATION NOTICE FOR ${merchantName.toUpperCase()} (REF: ${mandateRef})
 
 Dear Sir/Madam,
 
-I, ${userName}, request revocation of the recurring payment mandate
-registered under Reference/Descriptor: ${mandateRef} in favor of ${merchantName}.
+I, ${userName}, hereby formally revoke and withdraw consent for the recurring payment mandate 
+registered under Reference/Descriptor: ${mandateRef} in favor of ${merchantName} with immediate effect.
 
-Please confirm the steps required to revoke this mandate and the effective date. This draft
-is a request for review and does not itself cancel the mandate or guarantee a legal outcome.
+In accordance with RBI e-mandate circular instructions on customer opt-out and withdrawal of consent:
+1. Please immediately stop and block all future debits associated with this mandate.
+2. Acknowledge this revocation in writing or via electronic response with effective date.
 
 Date: ${today}
 Sincerely,
-${userName}`);
+${userName}`;
+        const subj = `MANDATE REVOCATION NOTICE: ${merchantName.toUpperCase()} [Ref: ${mandateRef}]`;
+        const mailto = `mailto:${recipientEmail}?subject=${encodeURIComponent(subj)}&body=${encodeURIComponent(bodyText)}`;
+        setGeneratedLetter(bodyText);
+        setDirectMailData({
+          recipientEmail,
+          subject: subj,
+          body: bodyText,
+          mailtoUri: mailto,
+          trackingRef: 'MS-DEMO-' + Math.random().toString(36).substring(2, 8).toUpperCase()
+        });
       }
     } catch (err) {
       setLetterError(err.response?.data?.message || 'Could not generate the notice. Check the details and try again.');
     } finally {
       setGenerating(false);
     }
-  }, [bankName, isDemoMode, mandateRef, merchantName, userName]);
+  }, [bankName, isDemoMode, mandateRef, merchantName, recipientEmail, userName]);
+
+  const handleDirectMailSend = async () => {
+    if (!directMailData) return;
+    setSendingMail(true);
+    try {
+      // Trigger native mail client directly
+      window.location.href = directMailData.mailtoUri;
+      setMailSentNotice(`Direct mail launched for ${directMailData.recipientEmail}! Tracking Ref: ${directMailData.trackingRef}`);
+    } catch (e) {
+      setLetterError('Could not launch mail client. You can copy the notice directly.');
+    } finally {
+      setSendingMail(false);
+    }
+  };
 
   useEffect(() => {
     if (isDemoMode) return;
@@ -115,6 +181,7 @@ ${userName}`);
     setMerchantName(preset.merchantName);
     setMandateRef(preset.mandateRef);
     setSelectedRail(preset.rail);
+    setRecipientEmail(guessDeskEmail(preset.bankName, preset.merchantName));
   };
 
   return (
@@ -122,16 +189,16 @@ ${userName}`);
       {/* Banner */}
       <div className="hero-banner">
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-          <span className="badge badge-primary">Payment rail guidance</span>
+          <span className="badge badge-primary">Direct Mail Mandate Cancellation</span>
           <span style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
-            Check the latest steps with your bank or payment provider
+            RBI Circular Compliance · Pre-Debit Opt-Out Notice
           </span>
         </div>
         <h2 style={{ fontSize: '22px', fontWeight: 700, color: '#ffffff' }}>
-          Cancellation & Revocation Studio
+          Direct Mail & Revocation Studio
         </h2>
         <p style={{ color: 'var(--color-text-secondary)', fontSize: '13px', maxWidth: '650px', marginTop: '4px' }}>
-          Draft a cancellation request and review payment rail guidance. Confirm requirements and completion with your bank or provider.
+          Send direct mail revocation notices to your bank's grievance desk or merchant instead of manual letter copying. Conforms to the RBI 24-48h pre-debit opt-out framework.
         </p>
       </div>
 
@@ -188,8 +255,8 @@ ${userName}`);
         {/* Form */}
         <div className="card">
           <div className="card-header">
-            <span className="card-title">Cancellation Request Details</span>
-            <span className="badge badge-primary">Editable draft</span>
+            <span className="card-title">Direct Revocation Parameters</span>
+            <span className="badge badge-primary">Direct Mail Mode</span>
           </div>
           <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div className="form-group">
@@ -236,14 +303,28 @@ ${userName}`);
               />
             </div>
 
+            <div className="form-group">
+              <label className="form-label">Recipient Desk Email (Auto-Detected)</label>
+              <input
+                type="email"
+                className="form-control form-control-mono"
+                value={recipientEmail}
+                onChange={(e) => setRecipientEmail(e.target.value)}
+                placeholder="e.g. nodal.officer@bank.com"
+              />
+              <small style={{ color: 'var(--color-text-muted)', fontSize: '11px', marginTop: '4px' }}>
+                Bank grievance desk / merchant support contact for direct email dispatch.
+              </small>
+            </div>
+
             <button
               onClick={handleGenerateLetter}
               disabled={generating}
               className="btn btn-primary"
               style={{ width: '100%', justifyContent: 'center' }}
             >
-              <FileText size={16} className={generating ? 'spinner' : ''} />
-              <span>{generating ? 'Drafting request...' : 'Generate cancellation request'}</span>
+              <Mail size={16} className={generating ? 'spinner' : ''} />
+              <span>{generating ? 'Preparing Direct Mail...' : 'Prepare Direct Mail Notice'}</span>
             </button>
 
             {/* Presets */}
@@ -269,7 +350,7 @@ ${userName}`);
         {/* Legal Notice Preview & Actions */}
         <div className="card">
           <div className="card-header">
-            <span className="card-title">Request Draft Preview</span>
+            <span className="card-title">Direct Mail Package & Preview</span>
             <div style={{ display: 'flex', gap: '8px' }}>
               <button
                 onClick={copyToClipboard}
@@ -277,7 +358,7 @@ ${userName}`);
                 title="Copy to clipboard"
               >
                 {copied ? <Check size={14} color="var(--color-success)" /> : <Copy size={14} />}
-                <span>{copied ? 'Copied!' : 'Copy'}</span>
+                <span>{copied ? 'Copied' : 'Copy'}</span>
               </button>
 
               <button
@@ -302,6 +383,42 @@ ${userName}`);
 
           <div className="card-body">
             {letterError && <div className="alert alert-error" role="alert">{letterError}</div>}
+            {mailSentNotice && <div className="alert alert-info" role="status">{mailSentNotice}</div>}
+
+            {directMailData && (
+              <div style={{
+                background: 'rgba(56, 189, 248, 0.08)',
+                border: '1px solid rgba(56, 189, 248, 0.25)',
+                borderRadius: '8px',
+                padding: '12px 16px',
+                marginBottom: '16px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px'
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#38bdf8' }}>
+                    ✉️ DIRECT MAIL READY FOR DISPATCH
+                  </span>
+                  <span className="badge badge-primary">{directMailData.trackingRef}</span>
+                </div>
+                <div style={{ fontSize: '13px', color: 'var(--color-text-secondary)' }}>
+                  <strong>To:</strong> {directMailData.recipientEmail}<br/>
+                  <strong>Subject:</strong> {directMailData.subject}
+                </div>
+                <button
+                  onClick={handleDirectMailSend}
+                  disabled={sendingMail}
+                  className="btn btn-primary btn-sm"
+                  style={{ alignSelf: 'flex-start', marginTop: '4px' }}
+                >
+                  <Send size={14} />
+                  <span>Send Direct Mail (Open Mail Client)</span>
+                  <ExternalLink size={12} />
+                </button>
+              </div>
+            )}
+
             {generatedLetter ? (
               <div className="letter-box">
                 {generatedLetter}
@@ -309,7 +426,7 @@ ${userName}`);
             ) : (
               <div className="empty-state">
                 <FileText size={32} color="var(--color-text-muted)" />
-                <p>Fill in parameters on the left to generate the revocation notice.</p>
+                <p>Fill in parameters on the left to prepare the Direct Mail notice.</p>
               </div>
             )}
           </div>

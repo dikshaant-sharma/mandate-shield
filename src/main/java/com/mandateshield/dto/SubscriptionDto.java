@@ -5,11 +5,13 @@ import com.mandateshield.domain.SubscriptionFrequency;
 import com.mandateshield.domain.SubscriptionStatus;
 
 import java.math.BigDecimal;
+import java.time.Duration;
 import java.time.Instant;
 
 public record SubscriptionDto(String id, String merchantName, String category, BigDecimal currentAmount,
                               SubscriptionFrequency frequency, SubscriptionStatus status, String paymentRail,
-                              Instant lastPaymentDate, Instant lastUserActivityDate,
+                              Instant lastPaymentDate, Instant nextChargeDate, Long hoursUntilCharge,
+                              Instant lastUserActivityDate,
                               Double detectionConfidence, String detectionEvidence, Double averageIntervalDays,
                               BigDecimal estimatedAnnualAmount) {
     public static SubscriptionDto from(SubscriptionDocument document) {
@@ -27,9 +29,14 @@ public record SubscriptionDto(String id, String merchantName, String category, B
                     ? BigDecimal.ZERO : amount.multiply(BigDecimal.valueOf(365.0 / document.getAverageIntervalDays()));
             case UNKNOWN -> BigDecimal.ZERO;
         };
+        Long hoursUntil = null;
+        if (document.getNextChargeDate() != null) {
+            hoursUntil = Duration.between(Instant.now(), document.getNextChargeDate()).toHours();
+        }
         return new SubscriptionDto(document.getId(), document.getMerchantName(), document.getCategory(),
                 document.getCurrentAmount(), document.getFrequency(), document.getStatus(), document.getPaymentRail(),
-                document.getLastPaymentDate(), document.getLastUserActivityDate(), document.getDetectionConfidence(),
+                document.getLastPaymentDate(), document.getNextChargeDate(), hoursUntil,
+                document.getLastUserActivityDate(), document.getDetectionConfidence(),
                 document.getDetectionEvidence(), document.getAverageIntervalDays(), annual.setScale(2, java.math.RoundingMode.HALF_UP));
     }
 }

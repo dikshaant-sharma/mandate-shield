@@ -7,6 +7,7 @@ import com.mandateshield.domain.SubscriptionStatus;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
 
 /** Scores repeating payment intervals and preserves uncertain/annual candidates for user review. */
@@ -60,13 +61,39 @@ public class RecurringDiscoveryEngine {
 
         boolean tentative = dated.size() < 3 || confidence < 0.70;
         RawTransactionDocument latest = dated.getLast();
+        double avgInterval = median(intervals);
+        Instant nextChargeDate = computeNextChargeDate(latest.getTransactionDate(), frequency, avgInterval);
         return SubscriptionDocument.builder().userId(userId).merchantName(merchantName)
                 .category(latest.getResolvedCategory()).currentAmount(latest.getAmount())
                 .frequency(frequency).status(tentative ? SubscriptionStatus.TENTATIVE : SubscriptionStatus.ACTIVE)
                 .paymentRail(latest.getPaymentRail()).lastPaymentDate(latest.getTransactionDate())
+                .nextChargeDate(nextChargeDate)
                 .lastUserActivityDate(lastUserActivity).firstDetectedAt(java.time.Instant.now())
                 .detectionConfidence(confidence).detectionEvidence(evidence)
-                .averageIntervalDays(median(intervals)).build();
+                .averageIntervalDays(avgInterval).build();
+    }
+
+    public static Instant computeNextChargeDate(Instant lastDate, SubscriptionFrequency frequency, double averageIntervalDays) {
+        if (lastDate == null) return null;
+        Instant now = Instant.now();
+        double stepDays = switch (frequency != null ? frequency : SubscriptionFrequency.MONTHLY) {
+            case DAILY -> 1.0;
+            case WEEKLY -> 7.0;
+            case BIWEEKLY -> 14.0;
+            case MONTHLY -> 30.44;
+            case BIMONTHLY -> 60.88;
+            case QUARTERLY -> 91.31;
+            case SEMIANNUAL -> 182.62;
+            case ANNUAL -> 365.24;
+            case IRREGULAR -> (averageIntervalDays > 0) ? averageIntervalDays : 30.44;
+            case UNKNOWN -> 30.44;
+        };
+        long stepSeconds = Math.max(86400L, Math.round(stepDays * 86400.0));
+        Instant next = lastDate.plusSeconds(stepSeconds);
+        while (next.isBefore(now)) {
+            next = next.plusSeconds(stepSeconds);
+        }
+        return next;
     }
 
     private PeriodScore score(Period period, List<Double> intervals) {

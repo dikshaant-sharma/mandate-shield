@@ -19,6 +19,7 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
+import org.springframework.security.web.header.writers.XXssProtectionHeaderWriter;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -39,6 +40,12 @@ public class SecurityConfig {
                 .cors(cors -> {})
                 .httpBasic(basic -> basic.disable())
                 .formLogin(form -> form.disable())
+                .headers(headers -> headers
+                        .contentTypeOptions(contentType -> {})
+                        .frameOptions(frame -> frame.deny())
+                        .xssProtection(xss -> xss.headerValue(XXssProtectionHeaderWriter.HeaderValue.ENABLED_MODE_BLOCK))
+                        .httpStrictTransportSecurity(hsts -> hsts.includeSubDomains(true).maxAgeInSeconds(31536000))
+                )
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
