@@ -64,9 +64,12 @@ mandateshield:
     api-key: ${PINECONE_API_KEY:}
     index-name: ${PINECONE_INDEX_NAME:mandateshield-merchants}
     index-host: ${PINECONE_INDEX_HOST:}
+  sarvam:
+    api-key: ${SARVAM_API_KEY:}
+    base-url: ${SARVAM_BASE_URL:https://api.sarvam.ai/v1}
   resolver:
     llm:
-      confidence-threshold: 0.7
+      confidence-threshold: 0.70
   jwt:
     # Never ship a reusable signing key. Configure a unique secret in the local .env.
     secret: ${MANDATESHIELD_JWT_SECRET}

@@ -1,7 +1,9 @@
 import axios from 'axios';
 
-// Directly hardcoded backend root for Render (https://mandate-shield.onrender.com)
-const BACKEND_ROOT = 'https://mandate-shield.onrender.com';
+// Auto-detect local backend vs Render production
+const BACKEND_ROOT = import.meta.env.VITE_API_BASE_URL !== undefined
+  ? import.meta.env.VITE_API_BASE_URL
+  : (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') ? '' : 'https://mandate-shield.onrender.com');
 
 const api = axios.create({
   baseURL: `${BACKEND_ROOT}/api/v1`,

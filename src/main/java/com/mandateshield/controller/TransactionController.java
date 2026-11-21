@@ -3,7 +3,7 @@ package com.mandateshield.controller;
 import com.mandateshield.domain.RawTransactionDocument;
 import com.mandateshield.engine.MerchantResolverEngine;
 import com.mandateshield.repository.RawTransactionRepository;
-import com.mandateshield.service.GeminiMerchantEnrichmentService;
+import com.mandateshield.service.SarvamMerchantEnrichmentService;
 import com.mandateshield.service.SharedMerchantKnowledgeService;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -30,7 +30,7 @@ import java.time.ZoneOffset;
 public class TransactionController {
     private final RawTransactionRepository transactions;
     private final MerchantResolverEngine resolver;
-    private final GeminiMerchantEnrichmentService geminiEnrichment;
+    private final SarvamMerchantEnrichmentService sarvamEnrichment;
     private final SharedMerchantKnowledgeService sharedMerchantKnowledge;
 
     @GetMapping
@@ -75,17 +75,11 @@ public class TransactionController {
         RawTransactionDocument saved = transactions.save(candidate);
         if (suppliedMerchant && Boolean.TRUE.equals(request.shareMerchant())) {
             sharedMerchantKnowledge.confirm(descriptor, result.brandName(), result.category());
-            geminiEnrichment.synchronizeKnownTierOne(userId, descriptor, result.brandName(), result.confidenceScore());
-        } else if (suppliedMerchant) {
-            resolver.asyncWriteBackPattern(userId, descriptor, result.brandName(), result.category());
-            geminiEnrichment.synchronizeKnownTierOne(userId, descriptor, result.brandName(), result.confidenceScore());
         } else if ("UNKNOWN".equalsIgnoreCase(result.brandName())) {
-            geminiEnrichment.scheduleIfUnknown(userId, descriptor, result.confidenceScore(), result.brandName());
-        } else if (result.resolutionTier() == com.mandateshield.domain.ResolutionTier.TIER_2) {
-            resolver.asyncWriteBackPattern(userId, descriptor, result.brandName(), result.category());
-        } else {
-            geminiEnrichment.synchronizeKnownTierOne(userId, descriptor, result.brandName(), result.confidenceScore());
+            // Schedule Sarvam async enrichment for unknown low-confidence descriptors
+            sarvamEnrichment.scheduleIfSuspicious(userId, descriptor, result.confidenceScore(), result.brandName());
         }
+        // NOTE: No asyncWriteBackPattern — Tier 2 results are NOT auto-promoted to Tier 1 cache.
         return TransactionView.from(saved);
     }
 

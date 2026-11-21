@@ -127,7 +127,7 @@ public class HeuristicExtractionEngine {
         BrandMatch brandMatch = extractBrand(cleaned);
         String brand = brandMatch.brand();
         String category = brandCategoryMap.getOrDefault(brand, "Uncategorized");
-        double confidence = brand.equals("UNKNOWN") ? 0.50 : brandMatch.confidence();
+        double confidence = "UNKNOWN".equalsIgnoreCase(brand) ? 0.0 : brandMatch.confidence();
 
         log.info("Heuristic resolved -> brand='{}', category='{}', gateway='{}', confidence={}", brand, category, gateway, confidence);
 
@@ -208,12 +208,10 @@ public class HeuristicExtractionEngine {
                 }
             }
         }
-        // Pass 4: fallback to longest token that is at least 3 chars
-        String fallback = tokens.stream()
-                .filter(t -> t.length() >= 3)
-                .max(Comparator.comparingInt(String::length))
-                .orElse("UNKNOWN");
-        return new BrandMatch(fallback, fallback.equals("UNKNOWN") ? 0.50 : 0.70);
+        // Pass 4: No known merchant match in aliases, substrings, or fuzzy distance.
+        // Return UNKNOWN with 0.0 confidence so that downstream layers (e.g. recurring unnamed check)
+        // can handle descriptors without an identified merchant, rather than fabricating a name.
+        return new BrandMatch("UNKNOWN", 0.0);
     }
 
     private int levenshteinDistance(String s1, String s2) {

@@ -1,12 +1,10 @@
-import React, { useCallback, useState, useEffect } from 'react';
+import React, { useCallback, useState } from 'react';
 import { 
   Compass, 
   Search, 
-  CheckCircle, 
-  Database, 
-  RotateCcw
+  CheckCircle
 } from 'lucide-react';
-import { resolveDescriptor, listPatterns, clearPatternCache } from '../api';
+import { resolveDescriptor } from '../api';
 import { SAMPLE_DESCRIPTORS } from '../data/sampleData';
 
 export default function ResolverPlayground({ activeUser, isDemoMode }) {
@@ -16,11 +14,6 @@ export default function ResolverPlayground({ activeUser, isDemoMode }) {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-
-  // Pattern library state
-  const [patterns, setPatterns] = useState([]);
-  const [cacheClearedStatus, setCacheClearedStatus] = useState(null);
-  const [patternFilter, setPatternFilter] = useState('');
 
   const handleResolve = useCallback(async (customDesc, customAmount) => {
     const raw = customDesc || descriptor;
@@ -40,7 +33,7 @@ export default function ResolverPlayground({ activeUser, isDemoMode }) {
         });
         setResult(res);
       } else {
-        // High fidelity mock resolution simulating Tier 1 & Tier 2 logic
+        // Demo mode: simulate resolution tiers faithfully
         await new Promise(r => setTimeout(r, 250));
         const foundSample = SAMPLE_DESCRIPTORS.find(s => s.raw === raw);
         if (foundSample) {
@@ -50,10 +43,10 @@ export default function ResolverPlayground({ activeUser, isDemoMode }) {
             gateway: raw.toUpperCase().includes('RAZORPAY') ? 'RAZORPAY' : raw.toUpperCase().includes('PAYU') ? 'PAYU' : 'DIRECT',
             confidenceScore: 0.96,
             resolutionTier: 'TIER_1',
-            matchedPattern: `(?i).*${foundSample.expectedBrand.split(' ')[0]}.*`
+            matchedPattern: `System-approved alias`
           });
         } else {
-          // Heuristic extraction
+          // Heuristic extraction simulation
           const cleanTokens = raw.replace(/[^a-zA-Z0-9\s]/g, ' ').split(/\s+/).filter(t => t.length > 2);
           const candidate = cleanTokens[0] || 'Unknown Merchant';
           setResult({
@@ -67,46 +60,13 @@ export default function ResolverPlayground({ activeUser, isDemoMode }) {
         }
       }
     } catch (err) {
-      console.warn('API error in resolver, applying client-side heuristic:', err);
-      setError('The resolver API could not be reached. Showing a local fallback result.');
-      // Fallback
-      setResult({
-        brandName: raw.split('*')[0] || raw.split(' ')[0] || 'Unresolved',
-        category: 'General Merchant',
-        gateway: 'AUTO_DETECT',
-        confidenceScore: 0.85,
-        resolutionTier: 'TIER_2',
-        matchedPattern: 'HEURISTIC_FALLBACK'
-      });
+      console.warn('API error in resolver:', err);
+      setError('The resolver API could not be reached. Please check if the backend is running.');
+      setResult(null);
     } finally {
       setLoading(false);
     }
   }, [activeUser.id, amount, currency, descriptor, isDemoMode]);
-
-  useEffect(() => {
-    const samplePatterns = [
-      { id: 'pat_1', regexPattern: '(?i).*AMZN.*|.*AMAZON.*', brandName: 'Amazon', category: 'Shopping', confidenceScore: 0.99, tier: 'TIER_1' },
-      { id: 'pat_2', regexPattern: '(?i).*NFLX.*|.*NETFLIX.*', brandName: 'Netflix', category: 'Streaming', confidenceScore: 0.99, tier: 'TIER_1' },
-      { id: 'pat_3', regexPattern: '(?i).*SPOTIFY.*', brandName: 'Spotify', category: 'Audio', confidenceScore: 0.98, tier: 'TIER_1' },
-      { id: 'pat_4', regexPattern: '(?i).*HOTSTAR.*', brandName: 'Disney+ Hotstar', category: 'Streaming', confidenceScore: 0.98, tier: 'TIER_1' },
-      { id: 'pat_5', regexPattern: '(?i).*YOUTUBE.*|.*GOOGLE.*YTB.*', brandName: 'YouTube Premium', category: 'Streaming', confidenceScore: 0.97, tier: 'TIER_1' },
-      { id: 'pat_6', regexPattern: '(?i).*ADOBE.*', brandName: 'Adobe', category: 'Productivity', confidenceScore: 0.99, tier: 'TIER_1' }
-    ];
-    const patternsRequest = isDemoMode ? Promise.resolve(samplePatterns) : listPatterns();
-    patternsRequest.then(res => { if (Array.isArray(res)) setPatterns(res); })
-      .catch(err => console.warn('Could not load patterns list:', err));
-  }, [isDemoMode]);
-
-  const handleClearCache = async () => {
-    try {
-      await clearPatternCache();
-      setCacheClearedStatus('Compiled regex cache invalidated successfully!');
-      setTimeout(() => setCacheClearedStatus(null), 3000);
-    } catch {
-      setCacheClearedStatus('Cache clear simulated: Cache refreshed.');
-      setTimeout(() => setCacheClearedStatus(null), 3000);
-    }
-  };
 
   const selectSample = (sample) => {
     setDescriptor(sample.raw);
@@ -114,26 +74,22 @@ export default function ResolverPlayground({ activeUser, isDemoMode }) {
     handleResolve(sample.raw, sample.amount);
   };
 
-  const filteredPatterns = patterns.filter(p => {
-    const q = patternFilter.toLowerCase();
-    return (p.brandName || '').toLowerCase().includes(q) || (p.category || '').toLowerCase().includes(q);
-  });
-
   return (
     <div className="page-content animate-fade-up">
       {/* Overview Banner */}
       <div className="hero-banner">
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-          <span className="badge badge-primary">Tier 1 & Tier 2 Resolution</span>
+          <span className="badge badge-primary">4-Tier Resolution</span>
           <span style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
-            High-Throughput Regex & Heuristic Fallback
+            Alias → Heuristic → Recurring → Sarvam AI (async)
           </span>
         </div>
         <h2 style={{ fontSize: '22px', fontWeight: 700, color: '#ffffff' }}>
           Merchant Descriptor Resolver Studio
         </h2>
         <p style={{ color: 'var(--color-text-secondary)', fontSize: '13px', maxWidth: '650px', marginTop: '4px' }}>
-          Test messy credit card and bank descriptors. MandateShield resolves cryptic descriptors like <code style={{ color: 'var(--color-primary-light)' }}>AMZN MKTP US*1A2B</code> into canonical merchant identities, categories, and payment gateways.
+          Resolves cryptic descriptors like <code style={{ color: 'var(--color-primary-light)' }}>ACH_INB_RAZORPAY_NETF_SUB</code> into canonical merchant identities.
+          Low-confidence unnamed descriptors trigger <strong>async Sarvam AI</strong> enrichment in the background.
         </p>
       </div>
 
@@ -232,7 +188,7 @@ export default function ResolverPlayground({ activeUser, isDemoMode }) {
             {loading ? (
               <div className="loading-center">
                 <div className="spinner"></div>
-                <p>Matching regex patterns & executing heuristic classifier...</p>
+                <p>Running resolution pipeline...</p>
               </div>
             ) : result ? (
               <div className="resolve-result">
@@ -250,6 +206,18 @@ export default function ResolverPlayground({ activeUser, isDemoMode }) {
                   )}
                   <span className="badge badge-muted">Tier: {result.resolutionTier}</span>
                 </div>
+
+                {result.resolutionTier === 'TIER_2' && result.matchedPattern === 'RECURRING_PATTERN_EXTRACT' && (
+                  <div className="alert alert-warning" style={{ marginTop: '8px', fontSize: '12px' }}>
+                    ⚡ Unnamed recurring descriptor detected. Sarvam AI enrichment scheduled in background.
+                  </div>
+                )}
+
+                {result.confidenceScore < 0.7 && result.resolutionTier !== 'TIER_1' && (
+                  <div className="alert alert-warning" style={{ marginTop: '8px', fontSize: '12px' }}>
+                    🔍 Low confidence — Sarvam AI async enrichment queued for this descriptor.
+                  </div>
+                )}
 
                 <div className="divider"></div>
 
@@ -277,7 +245,7 @@ export default function ResolverPlayground({ activeUser, isDemoMode }) {
                 {/* Matched Pattern details */}
                 <div style={{ marginTop: '8px' }}>
                   <span style={{ fontSize: '11px', color: 'var(--color-text-muted)', display: 'block', marginBottom: '4px' }}>
-                    Matched Pattern / Heuristic Rule
+                    Resolution Method
                   </span>
                   <div style={{
                     background: 'var(--color-bg-base)',
@@ -288,7 +256,7 @@ export default function ResolverPlayground({ activeUser, isDemoMode }) {
                     color: 'var(--color-accent)',
                     wordBreak: 'break-all'
                   }}>
-                    {result.matchedPattern || 'Direct heuristic dictionary fallback'}
+                    {result.matchedPattern || 'Heuristic fallback — Sarvam AI async enrichment pending'}
                   </div>
                 </div>
               </div>
@@ -302,85 +270,26 @@ export default function ResolverPlayground({ activeUser, isDemoMode }) {
         </div>
       </div>
 
-      {/* Pattern Library Section */}
-      <div className="card">
+      {/* Resolution Tier Legend */}
+      <div className="card" style={{ marginTop: '0' }}>
         <div className="card-header">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Database size={18} color="var(--color-primary-light)" />
-            <span className="card-title">Stored Merchant Pattern Dictionary</span>
-          </div>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-            <input
-              type="text"
-              placeholder="Search patterns..."
-              className="form-control"
-              style={{ fontSize: '12px', padding: '6px 12px', width: '180px' }}
-              value={patternFilter}
-              onChange={(e) => setPatternFilter(e.target.value)}
-            />
-            <button
-              onClick={handleClearCache}
-              className="btn btn-secondary btn-sm"
-              title="Clears in-memory regex compilation cache"
-            >
-              <RotateCcw size={12} />
-              <span>Clear Cache</span>
-            </button>
-          </div>
+          <span className="card-title">Resolution Architecture</span>
+          <span className="badge badge-muted">Reference</span>
         </div>
-
-        {cacheClearedStatus && (
-          <div style={{ margin: '16px 20px 0' }} className="alert alert-success">
-            <CheckCircle size={14} />
-            <span>{cacheClearedStatus}</span>
-          </div>
-        )}
-
-        <div className="card-body" style={{ padding: '0' }}>
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Brand Identity</th>
-                  <th>Category</th>
-                  <th>Compiled Regex Pattern</th>
-                  <th>Tier</th>
-                  <th>Confidence Weight</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredPatterns.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} style={{ textAlign: 'center', padding: '24px', color: 'var(--color-text-muted)' }}>
-                      No matching merchant patterns found.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredPatterns.map((pat, idx) => (
-                    <tr key={pat.id || idx}>
-                      <td style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>
-                        {pat.brandName}
-                      </td>
-                      <td>
-                        <span className="badge badge-muted">{pat.category || 'General'}</span>
-                      </td>
-                      <td style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--color-primary-light)' }}>
-                        {pat.regexPattern}
-                      </td>
-                      <td>
-                        <span className="badge badge-success">
-                          {pat.tier || 'TIER_1'}
-                        </span>
-                      </td>
-                      <td style={{ fontFamily: 'var(--font-mono)' }}>
-                        {pat.confidenceScore ? `${(pat.confidenceScore * 100).toFixed(0)}%` : '99%'}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
+        <div className="card-body">
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
+            {[
+              { tier: 'Tier 1', label: 'System-Approved Aliases', desc: 'Admin-seeded merchant aliases from MongoDB. High confidence (≥98%). Never auto-learned.', color: 'var(--color-success)' },
+              { tier: 'Tier 2', label: 'Heuristic / Vector', desc: 'Regex tokens, alias map, Levenshtein fuzzy match, Pinecone vector similarity. Returned only if confidence ≥80%.', color: 'var(--color-warning)' },
+              { tier: 'Tier 2.5', label: 'Unnamed Recurring', desc: 'If the same unknown descriptor recurs ≥2× for the user, its stable token becomes a placeholder group name.', color: '#a78bfa' },
+              { tier: 'Tier 3', label: 'Sarvam AI (Async)', desc: 'Triggered only for suspicious / unnamed low-confidence descriptors. Runs in background. Never synchronous.', color: 'var(--color-danger)' },
+            ].map(item => (
+              <div key={item.tier} style={{ padding: '12px', background: 'var(--color-bg-base)', borderRadius: 'var(--radius-sm)', borderLeft: `3px solid ${item.color}` }}>
+                <div style={{ fontWeight: 700, color: item.color, fontSize: '12px' }}>{item.tier}</div>
+                <div style={{ fontWeight: 600, fontSize: '13px', marginTop: '2px' }}>{item.label}</div>
+                <div style={{ fontSize: '12px', color: 'var(--color-text-muted)', marginTop: '4px' }}>{item.desc}</div>
+              </div>
+            ))}
           </div>
         </div>
       </div>

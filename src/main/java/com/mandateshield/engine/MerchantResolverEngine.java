@@ -5,30 +5,37 @@ import com.mandateshield.domain.RawTransactionDocument;
 import com.mandateshield.domain.ResolutionTier;
 import com.mandateshield.repository.MerchantPatternRepository;
 import com.mandateshield.repository.RawTransactionRepository;
-import com.mandateshield.service.GeminiMerchantEnrichmentService;
 import com.mandateshield.service.SharedMerchantKnowledgeService;
+import com.mandateshield.service.SarvamMerchantEnrichmentService;
 import com.mandateshield.service.PineconeMerchantVectorService;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.*;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
- * Core service that resolves a raw transaction descriptor across 3 layers:
- * <p>
- * Layer 1 (Tier 1): fast regex lookup against stored patterns and shared knowledge.
- * Layer 2 (Tier 2): Pinecone vector similarity search & heuristic extraction with single-letter normalization and fuzzy matching.
- * Layer 3 (Tier 3): Google Gemini LLM fallback for low-confidence or obfuscated descriptors.
+ * Core 3-tier merchant resolver:
+ *
+ * Tier 1  — System-approved alias lookup (SharedMerchantKnowledgeService → shared_merchant_aliases collection).
+ *           Only pre-seeded, human/admin-approved entries live here. Auto-learned names NEVER enter Tier 1.
+ *
+ * Tier 2  — Heuristic extraction (regex tokens, alias map, Levenshtein fuzzy match from HeuristicExtractionEngine)
+ *           + Pinecone vector similarity. High-confidence (≥0.80) results are returned immediately.
+ *
+ * Tier 2.5 — Unnamed descriptor layer: if the descriptor produced no recognisable brand, check whether the
+ *            same raw descriptor string recurs across the user's history. If it does, extract the common
+ *            stable sub-string as a placeholder name so recurring detection can group it.
+ *
+ * Tier 3  — Sarvam AI async enrichment: fired only for truly unknown, low-confidence descriptors.
+ *            Never called synchronously. Never writes to Tier 1 cache.
+ *
+ * Cache policy: NO in-memory pattern cache. NO auto-write-back to merchant_patterns from AI or Tier 2 results.
+ * Only reads from pattern repo (system-seeded records) and shared_merchant_aliases.
  */
 @Service
 @Slf4j
@@ -39,12 +46,7 @@ public class MerchantResolverEngine {
     private final HeuristicExtractionEngine heuristicEngine;
     private final SharedMerchantKnowledgeService sharedKnowledge;
     private final PineconeMerchantVectorService pinecone;
-    private final ObjectProvider<GeminiMerchantEnrichmentService> geminiProvider;
-
-    /** Cache of compiled regex patterns to avoid recompilation on every request. */
-    private final Map<String, Pattern> compiledPatternCache = new ConcurrentHashMap<>();
-    /** Positive exact descriptor lookups are cached by account and descriptor. */
-    private final Map<PatternKey, MerchantPatternDocument> exactPatternCache = new ConcurrentHashMap<>();
+    private final SarvamMerchantEnrichmentService sarvamEnrichment;
 
     @Autowired
     public MerchantResolverEngine(MerchantPatternRepository patternRepo,
@@ -52,17 +54,18 @@ public class MerchantResolverEngine {
                                   HeuristicExtractionEngine heuristicEngine,
                                   SharedMerchantKnowledgeService sharedKnowledge,
                                   PineconeMerchantVectorService pinecone,
-                                  ObjectProvider<GeminiMerchantEnrichmentService> geminiProvider) {
+                                  SarvamMerchantEnrichmentService sarvamEnrichment) {
         this.patternRepo = patternRepo;
         this.transactionRepo = transactionRepo;
         this.heuristicEngine = heuristicEngine;
         this.sharedKnowledge = sharedKnowledge;
         this.pinecone = pinecone;
-        this.geminiProvider = geminiProvider;
+        this.sarvamEnrichment = sarvamEnrichment;
     }
 
     /**
-     * Resolve the descriptor across Layer 1 (Regex), Layer 2 (Vector/Heuristic), Layer 3 (Gemini LLM) and persist the transaction.
+     * Resolve the descriptor across Tier 1 → Tier 2 → Tier 2.5 → Tier 3 and persist.
+     * Confidence score is only set after the full check for each tier is complete.
      */
     public ResolveResult resolve(String rawDescriptor,
                                 Long userId,
@@ -73,100 +76,121 @@ public class MerchantResolverEngine {
         log.info("Resolving descriptor: '{}'", rawDescriptor);
 
         // ------------------------------------------------------------------
-        // Layer 1 (Tier 1) – regex match against shared knowledge & stored patterns
+        // Tier 1 — System-approved alias lookup (shared_merchant_aliases only)
         // ------------------------------------------------------------------
         Optional<MerchantPatternDocument> tier1Match = sharedKnowledge.find(rawDescriptor).map(alias ->
-                MerchantPatternDocument.builder().patternRegex("SHARED:" + alias.getDescriptorFingerprint())
-                        .brandName(alias.getMerchantName()).category(alias.getCategory()).confidenceScore(0.98)
-                        .verificationSource(alias.getVerificationSource()).build());
-        if (tier1Match.isEmpty()) tier1Match = findPatternMatch(rawDescriptor, userId);
+                MerchantPatternDocument.builder()
+                        .patternRegex("SHARED:" + alias.getDescriptorFingerprint())
+                        .brandName(alias.getMerchantName())
+                        .category(alias.getCategory())
+                        .confidenceScore(0.98)
+                        .verificationSource(alias.getVerificationSource())
+                        .build());
+        if (tier1Match.isEmpty()) tier1Match = findApprovedPatternMatch(rawDescriptor, userId);
+
         if (tier1Match.isPresent()) {
             MerchantPatternDocument pat = tier1Match.get();
-            log.info("Layer 1 (Tier 1) match for '{}' -> brand='{}'", rawDescriptor, pat.getBrandName());
+            // Confidence is only written after full Tier 1 lookup is confirmed
+            double confirmedConfidence = pat.getConfidenceScore() != null ? pat.getConfidenceScore() : 0.98;
+            log.info("Tier 1 match for '{}' -> brand='{}', confidence={}", rawDescriptor, pat.getBrandName(), confirmedConfidence);
             saveRawTransaction(userId, rawDescriptor, amount, currency, transactionDate,
-                    pat.getBrandName(), pat.getCategory(), pat.getConfidenceScore(), ResolutionTier.TIER_1);
+                    pat.getBrandName(), pat.getCategory(), confirmedConfidence, ResolutionTier.TIER_1);
             return new ResolveResult(pat.getBrandName(), pat.getCategory(),
-                    extractGateway(rawDescriptor), pat.getConfidenceScore(),
+                    extractGateway(rawDescriptor), confirmedConfidence,
                     ResolutionTier.TIER_1, pat.getPatternRegex());
         }
 
         // ------------------------------------------------------------------
-        // Layer 2 (Tier 2) – Pinecone Vector search
+        // Tier 2 — Pinecone vector similarity search
         // ------------------------------------------------------------------
         PineconeMerchantVectorService.Match vectorMatch = pinecone.find(rawDescriptor);
         if (vectorMatch != null) {
+            // Only accept vector match after confirming the score is meaningful
+            double vectorConfidence = vectorMatch.score();
             String category = heuristicEngine.getBrandCategoryMap().getOrDefault(vectorMatch.merchant(), "Uncategorized");
-            log.info("Layer 2 (Tier 2) Vector match for '{}' -> brand='{}', score={}", rawDescriptor, vectorMatch.merchant(), vectorMatch.score());
+            log.info("Tier 2 (Vector) match for '{}' -> brand='{}', score={}", rawDescriptor, vectorMatch.merchant(), vectorConfidence);
             saveRawTransaction(userId, rawDescriptor, amount, currency, transactionDate,
-                    vectorMatch.merchant(), category, vectorMatch.score(), ResolutionTier.TIER_2);
+                    vectorMatch.merchant(), category, vectorConfidence, ResolutionTier.TIER_2);
             return new ResolveResult(vectorMatch.merchant(), category, extractGateway(rawDescriptor),
-                    vectorMatch.score(), ResolutionTier.TIER_2, "PINECONE_VECTOR");
+                    vectorConfidence, ResolutionTier.TIER_2, "PINECONE_VECTOR");
         }
 
         // ------------------------------------------------------------------
-        // Layer 2 (Tier 2) – Heuristic extraction fallback (fuzzy + single letter concatenation)
+        // Tier 2 — Heuristic extraction (fuzzy + alias + token)
+        // The confidence score is derived from the full heuristic pipeline output, NOT set prematurely.
         // ------------------------------------------------------------------
-        log.info("Checking Layer 2 heuristic for '{}'", rawDescriptor);
         HeuristicExtractionEngine.HeuristicResolutionResult heur = heuristicEngine.resolve(rawDescriptor);
         if (!"UNKNOWN".equalsIgnoreCase(heur.brandName()) && heur.confidenceScore() >= 0.80) {
-            log.info("Layer 2 (Tier 2) Heuristic match for '{}' -> brand='{}', confidence={}", rawDescriptor, heur.brandName(), heur.confidenceScore());
+            log.info("Tier 2 (Heuristic) match for '{}' -> brand='{}', confidence={}", rawDescriptor, heur.brandName(), heur.confidenceScore());
             saveRawTransaction(userId, rawDescriptor, amount, currency, transactionDate,
                     heur.brandName(), heur.category(), heur.confidenceScore(), heur.resolutionTier());
-            pinecone.remember(rawDescriptor, heur.brandName(), heur.category());
-            asyncWriteBackPattern(userId, rawDescriptor, heur.brandName(), heur.category());
+            // NOTE: No write-back to pattern repo. Tier 2 results are NOT promoted to Tier 1.
             return new ResolveResult(heur.brandName(), heur.category(), heur.gateway(),
                     heur.confidenceScore(), heur.resolutionTier(), "HEURISTIC_RULE");
         }
 
         // ------------------------------------------------------------------
-        // Layer 3 (Tier 3) – Google Gemini LLM fallback
+        // Tier 2.5 — Unnamed descriptor layer
+        // If no brand resolved, check if the same descriptor string recurs for this user.
+        // If it does, extract the common unique part of the descriptor string as name,
+        // so that the recurring detection engine can group these payments.
         // ------------------------------------------------------------------
-        log.info("No Tier 1/2 match found, invoking Layer 3 Gemini LLM for '{}'", rawDescriptor);
-        GeminiMerchantEnrichmentService gemini = geminiProvider.getIfAvailable();
-        if (gemini != null) {
-            String geminiBrand = gemini.resolveSynchronous(rawDescriptor);
-            if (geminiBrand != null && !"UNKNOWN".equalsIgnoreCase(geminiBrand)) {
-                String category = heuristicEngine.getBrandCategoryMap().getOrDefault(geminiBrand, "Uncategorized");
-                double confidence = 0.95;
-                log.info("Layer 3 (Tier 3) Gemini LLM match for '{}' -> brand='{}'", rawDescriptor, geminiBrand);
-                saveRawTransaction(userId, rawDescriptor, amount, currency, transactionDate,
-                        geminiBrand, category, confidence, ResolutionTier.TIER_3);
-                pinecone.remember(rawDescriptor, geminiBrand, category);
-                asyncWriteBackPattern(userId, rawDescriptor, geminiBrand, category);
-                return new ResolveResult(geminiBrand, category, extractGateway(rawDescriptor),
-                        confidence, ResolutionTier.TIER_3, "GEMINI_LLM");
-            }
+        RecurringExtraction recurringMatch = resolveByRecurringPattern(userId, rawDescriptor);
+        if (recurringMatch != null) {
+            String category = "Recurring — Unidentified";
+            log.info("Tier 2.5 (Recurring unnamed) match for '{}' -> name='{}', confidence={}",
+                    rawDescriptor, recurringMatch.merchantName(), recurringMatch.confidence());
+            saveRawTransaction(userId, rawDescriptor, amount, currency, transactionDate,
+                    recurringMatch.merchantName(), category, recurringMatch.confidence(), ResolutionTier.TIER_2);
+            // Schedule Sarvam async enrichment — it's an unnamed recurring descriptor
+            sarvamEnrichment.scheduleIfSuspicious(userId, rawDescriptor, recurringMatch.confidence(), "UNKNOWN");
+            return new ResolveResult(recurringMatch.merchantName(), category, extractGateway(rawDescriptor),
+                    recurringMatch.confidence(), ResolutionTier.TIER_2, "RECURRING_PATTERN_EXTRACT");
         }
 
         // ------------------------------------------------------------------
-        // Unresolved / UNKNOWN fallback
+        // Tier 3 — Sarvam AI async enrichment (scheduled only, never synchronous)
+        // Fire and forget. The transaction is saved now with low confidence;
+        // the async task will update it once Sarvam responds.
         // ------------------------------------------------------------------
+        double unknownConfidence = heur.confidenceScore(); // actual score from full heuristic run
+        log.info("No Tier 1/2 match for '{}' — confidence={}. Scheduling Sarvam async enrichment.",
+                rawDescriptor, unknownConfidence);
         saveRawTransaction(userId, rawDescriptor, amount, currency, transactionDate,
-                heur.brandName(), heur.category(), heur.confidenceScore(), heur.resolutionTier());
+                heur.brandName(), heur.category(), unknownConfidence, heur.resolutionTier());
+        sarvamEnrichment.scheduleIfSuspicious(userId, rawDescriptor, unknownConfidence, heur.brandName());
         return new ResolveResult(heur.brandName(), heur.category(), heur.gateway(),
-                heur.confidenceScore(), heur.resolutionTier(), null);
+                unknownConfidence, heur.resolutionTier(), null);
     }
 
-    /** Resolve and update an already-ingested Mongo document without inserting a duplicate. */
+    /**
+     * Resolve and update an already-ingested transaction document without inserting a duplicate.
+     * Same tier ordering as resolve(); Sarvam is async-only and never called here directly.
+     */
     public ResolveResult resolveExisting(RawTransactionDocument transaction) {
         if (transaction == null || transaction.getRawDescriptor() == null || transaction.getRawDescriptor().isBlank()) {
             throw new IllegalArgumentException("Raw transaction descriptor is required");
         }
         String descriptor = transaction.getRawDescriptor();
 
-        // Layer 1 (Tier 1)
+        // Tier 1
         Optional<MerchantPatternDocument> match = sharedKnowledge.find(descriptor)
-                .map(alias -> MerchantPatternDocument.builder().patternRegex("SHARED:" + alias.getDescriptorFingerprint())
-                        .brandName(alias.getMerchantName()).category(alias.getCategory()).confidenceScore(0.98)
-                        .verificationSource(alias.getVerificationSource()).build());
-        if (match.isEmpty()) match = findPatternMatch(descriptor, transaction.getUserId());
+                .map(alias -> MerchantPatternDocument.builder()
+                        .patternRegex("SHARED:" + alias.getDescriptorFingerprint())
+                        .brandName(alias.getMerchantName())
+                        .category(alias.getCategory())
+                        .confidenceScore(0.98)
+                        .verificationSource(alias.getVerificationSource())
+                        .build());
+        if (match.isEmpty()) match = findApprovedPatternMatch(descriptor, transaction.getUserId());
         if (match.isPresent()) {
             MerchantPatternDocument pattern = match.get();
-            return new ResolveResult(pattern.getBrandName(), pattern.getCategory(), extractGateway(descriptor),
-                    pattern.getConfidenceScore(), ResolutionTier.TIER_1, pattern.getPatternRegex());
+            double conf = pattern.getConfidenceScore() != null ? pattern.getConfidenceScore() : 0.98;
+            return new ResolveResult(pattern.getBrandName(), pattern.getCategory(),
+                    extractGateway(descriptor), conf, ResolutionTier.TIER_1, pattern.getPatternRegex());
         }
 
-        // Layer 2 (Tier 2) Vector
+        // Tier 2 — Vector
         PineconeMerchantVectorService.Match vectorMatch = pinecone.find(descriptor);
         if (vectorMatch != null) {
             String category = heuristicEngine.getBrandCategoryMap().getOrDefault(vectorMatch.merchant(), "Uncategorized");
@@ -174,60 +198,101 @@ public class MerchantResolverEngine {
                     vectorMatch.score(), ResolutionTier.TIER_2, "PINECONE_VECTOR");
         }
 
-        // Layer 2 (Tier 2) Heuristic
+        // Tier 2 — Heuristic
         HeuristicExtractionEngine.HeuristicResolutionResult result = heuristicEngine.resolve(descriptor);
         if (!"UNKNOWN".equalsIgnoreCase(result.brandName()) && result.confidenceScore() >= 0.80) {
-            pinecone.remember(descriptor, result.brandName(), result.category());
             return new ResolveResult(result.brandName(), result.category(), result.gateway(),
                     result.confidenceScore(), result.resolutionTier(), "HEURISTIC_RULE");
         }
 
-        // Layer 3 (Tier 3) Gemini LLM
-        GeminiMerchantEnrichmentService gemini = geminiProvider.getIfAvailable();
-        if (gemini != null) {
-            String geminiBrand = gemini.resolveSynchronous(descriptor);
-            if (geminiBrand != null && !"UNKNOWN".equalsIgnoreCase(geminiBrand)) {
-                String category = heuristicEngine.getBrandCategoryMap().getOrDefault(geminiBrand, "Uncategorized");
-                pinecone.remember(descriptor, geminiBrand, category);
-                asyncWriteBackPattern(transaction.getUserId(), descriptor, geminiBrand, category);
-                return new ResolveResult(geminiBrand, category, extractGateway(descriptor),
-                        0.95, ResolutionTier.TIER_3, "GEMINI_LLM");
-            }
+        // Tier 2.5 — Recurring unnamed
+        RecurringExtraction recurringMatch = resolveByRecurringPattern(transaction.getUserId(), descriptor);
+        if (recurringMatch != null) {
+            return new ResolveResult(recurringMatch.merchantName(), "Recurring — Unidentified", extractGateway(descriptor),
+                    recurringMatch.confidence(), ResolutionTier.TIER_2, "RECURRING_PATTERN_EXTRACT");
         }
 
+        // Return heuristic partial result (Sarvam will update async if applicable)
         return new ResolveResult(result.brandName(), result.category(), result.gateway(),
                 result.confidenceScore(), result.resolutionTier(), null);
     }
 
-    /** Regex lookup with compiled pattern cache for performance. */
-    private Optional<MerchantPatternDocument> findPatternMatch(String rawDescriptor, Long userId) {
+    /**
+     * Tier 2.5: Unnamed descriptor recurring check.
+     * <p>
+     * When a descriptor contains no recognizable merchant name from Tier 1 or Tier 2:
+     * Check if previous transactions exist with the exact same descriptor string for this user.
+     * If recurring payments are found, extract the common unique part of that descriptor string
+     * as the merchant name and assign a confidence score reflecting recurrence strength.
+     */
+    private RecurringExtraction resolveByRecurringPattern(Long userId, String rawDescriptor) {
+        if (userId == null || rawDescriptor == null || rawDescriptor.isBlank()) return null;
+        try {
+            List<RawTransactionDocument> existing = transactionRepo.findByUserIdAndRawDescriptor(userId, rawDescriptor);
+            if (existing.isEmpty()) return null; // No previous transaction found, cannot confirm recurring yet
+
+            // Extract the common unique part: strip stopwords, gateways, numbers, and separators
+            List<String> uniqueTokens = Arrays.stream(rawDescriptor.toUpperCase(Locale.ROOT)
+                            .replaceAll("[*_\\-./#@|:;,(){}\\[\\]\\d]+", " ")
+                            .trim()
+                            .split("\\s+"))
+                    .filter(t -> t.length() >= 2)
+                    .filter(t -> !heuristicEngine.getStopwords().contains(t))
+                    .filter(t -> !heuristicEngine.getGateways().contains(t))
+                    .distinct()
+                    .toList();
+
+            String commonPart;
+            if (uniqueTokens.isEmpty()) {
+                String clean = rawDescriptor.replaceAll("[^A-Za-z]+", " ").trim();
+                commonPart = clean.isBlank() ? "RECURRING_MANDATE" : clean;
+            } else {
+                commonPart = String.join(" ", uniqueTokens);
+            }
+
+            // Confidence score is set only after complete empirical check:
+            // 1 previous occurrence (2 total) -> 0.75; 2+ previous (3+ total) -> 0.85
+            double confidence = existing.size() >= 2 ? 0.85 : 0.75;
+            return new RecurringExtraction(commonPart, confidence);
+        } catch (Exception e) {
+            log.warn("Tier 2.5 recurring check failed for '{}': {}", rawDescriptor, e.getMessage());
+            return null;
+        }
+    }
+
+    private record RecurringExtraction(String merchantName, double confidence) {}
+
+    /**
+     * Look up system-approved patterns from the pattern repository.
+     * Only patterns with verificationSource set (i.e., seeded/admin-approved) are used.
+     * Auto-learned patterns from AI/heuristics are excluded.
+     */
+    private Optional<MerchantPatternDocument> findApprovedPatternMatch(String rawDescriptor, Long userId) {
         if (rawDescriptor == null || rawDescriptor.isBlank()) return Optional.empty();
-        MerchantPatternDocument exactCached = exactPatternCache.get(new PatternKey(userId, rawDescriptor));
-        if (exactCached != null) return Optional.of(exactCached);
         List<MerchantPatternDocument> patterns = patternRepo.findAll().stream()
-                .filter(pattern -> pattern.getUserId() == null || Objects.equals(pattern.getUserId(), userId))
+                .filter(p -> p.getUserId() == null || Objects.equals(p.getUserId(), userId))
+                // Only system-approved (seeded) patterns; not auto-learned ones
+                .filter(p -> p.getVerificationSource() != null
+                        && !p.getVerificationSource().startsWith("RESOLVER_AUTO")
+                        && !p.getVerificationSource().startsWith("GEMINI_USER")
+                        && !p.getVerificationSource().startsWith("SARVAM_USER"))
+                .filter(p -> p.getBrandName() != null && !"UNKNOWN".equalsIgnoreCase(p.getBrandName()))
                 .toList();
-        // Prefer an exact descriptor mapping over older heuristic substring patterns.
+
+        // Exact descriptor match first
         Optional<MerchantPatternDocument> exact = patterns.stream()
                 .filter(pat -> Pattern.quote(rawDescriptor).equals(pat.getPatternRegex()))
-                .filter(pat -> pat.getBrandName() != null && !"UNKNOWN".equalsIgnoreCase(pat.getBrandName()))
                 .findFirst();
-        exact.ifPresent(pattern -> exactPatternCache.put(new PatternKey(userId, rawDescriptor), pattern));
         if (exact.isPresent()) return exact;
+
+        // Regex match
         for (MerchantPatternDocument pat : patterns) {
             if (pat.getPatternRegex() == null || pat.getPatternRegex().isBlank()) continue;
-            if (pat.getBrandName() == null || "UNKNOWN".equalsIgnoreCase(pat.getBrandName())) continue;
             try {
-                Pattern p = compiledPatternCache.computeIfAbsent(
-                        pat.getPatternRegex(),
-                        regex -> Pattern.compile(regex, Pattern.CASE_INSENSITIVE)
-                );
-                if (p.matcher(rawDescriptor).matches()) {
-                    return Optional.of(pat);
-                }
+                Pattern p = Pattern.compile(pat.getPatternRegex(), Pattern.CASE_INSENSITIVE);
+                if (p.matcher(rawDescriptor).matches()) return Optional.of(pat);
             } catch (Exception e) {
-                log.warn("Invalid regex pattern stored for brand {}: {}",
-                        pat.getBrandName(), pat.getPatternRegex(), e);
+                log.warn("Invalid regex pattern for brand {}: {}", pat.getBrandName(), pat.getPatternRegex());
             }
         }
         return Optional.empty();
@@ -257,7 +322,6 @@ public class MerchantResolverEngine {
         }
     }
 
-    /** Extracts known gateway prefix if present, otherwise "UNKNOWN". */
     private String extractGateway(String raw) {
         String upper = raw.toUpperCase();
         for (String gw : heuristicEngine.getGateways()) {
@@ -266,54 +330,28 @@ public class MerchantResolverEngine {
                 return gw;
             }
         }
-        // Also check if gateway appears anywhere in the descriptor
         for (String gw : heuristicEngine.getGateways()) {
-            if (upper.contains(gw)) {
-                return gw;
-            }
+            if (upper.contains(gw)) return gw;
         }
         return "UNKNOWN";
     }
 
-    /** Asynchronously persist a new pattern derived from a resolution. */
-    @Async
-    public void asyncWriteBackPattern(Long userId, String rawDescriptor, String brand, String category) {
-        try {
-            String regex = Pattern.quote(rawDescriptor);
-            MerchantPatternDocument newPat = MerchantPatternDocument.builder()
-                    .patternRegex(regex)
-                    .brandName(brand)
-                    .category(category)
-                    .userId(userId)
-                    .verificationSource("RESOLVER_AUTO_LEARNED")
-                    .confidenceScore(0.88)
-                    .createdAt(Instant.now())
-                    .build();
-            patternRepo.save(newPat);
-            // Invalidate cache so new pattern is picked up
-            compiledPatternCache.clear();
-            exactPatternCache.clear();
-            log.info("Learned new Tier 1 pattern: {} -> {}", regex, brand);
-        } catch (Exception e) {
-            log.error("Failed to write back pattern for '{}': {}", rawDescriptor, e.getMessage(), e);
-        }
-    }
-
-    /** Expose all stored patterns (used by the controller). */
+    /** Returns only system-approved patterns (not auto-learned). Used by the controller. */
     public List<MerchantPatternDocument> getAllPatterns(Long userId) {
         return patternRepo.findAll().stream()
-                .filter(pattern -> pattern.getUserId() == null || Objects.equals(pattern.getUserId(), userId))
+                .filter(p -> p.getUserId() == null || Objects.equals(p.getUserId(), userId))
+                .filter(p -> p.getVerificationSource() != null
+                        && !p.getVerificationSource().startsWith("RESOLVER_AUTO")
+                        && !p.getVerificationSource().startsWith("GEMINI_USER")
+                        && !p.getVerificationSource().startsWith("SARVAM_USER"))
                 .toList();
     }
 
-    /** Clear the compiled pattern cache (useful when patterns are updated externally). */
+    /** No-op kept for API compatibility — no in-memory cache exists anymore. */
     public void clearPatternCache() {
-        compiledPatternCache.clear();
-        exactPatternCache.clear();
-        log.info("Pattern cache cleared.");
+        log.info("clearPatternCache() called — no in-memory cache to clear (by design).");
     }
 
-    /** DTO returned to the controller layer. */
     public record ResolveResult(
             String brandName,
             String category,
@@ -321,6 +359,4 @@ public class MerchantResolverEngine {
             double confidenceScore,
             ResolutionTier resolutionTier,
             String matchedPattern) {}
-
-    private record PatternKey(Long userId, String descriptor) {}
 }
