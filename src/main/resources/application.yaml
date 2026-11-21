@@ -32,6 +32,11 @@ spring:
 
 server:
   port: ${PORT:8080}
+  tomcat:
+    threads:
+      max: 20
+      min-spare: 4
+    max-connections: 200
 
 management:
   endpoints:

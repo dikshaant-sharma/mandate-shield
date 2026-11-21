@@ -41,6 +41,11 @@ COPY --from=backend-builder /app/target/*.jar app.jar
 # Expose backend port
 EXPOSE 8080
 
-ENV JAVA_OPTS="-XX:+UseZGC -Xms128m -Xmx256m"
+# Tune JVM for 512MB container constraint:
+# - SerialGC has minimal GC runtime data structure overhead compared to G1 or ZGC
+# - Limit heap to 128MB min / 256MB max
+# - Constrain Metaspace, Code Cache and Thread Stack to keep total process footprint well below 512MB
+ENV PORT=8080 \
+    JAVA_OPTS="-XX:+UseSerialGC -Xms128m -Xmx256m -XX:MaxMetaspaceSize=128m -XX:ReservedCodeCacheSize=32m -Xss512k -XX:+ExitOnOutOfMemoryError"
 
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -Dserver.port=${PORT} -jar app.jar"]
