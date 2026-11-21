@@ -6,6 +6,12 @@
   <component name="ChangeListManager">
     <list default="true" id="35304f15-a34d-4ee4-8f7b-25cea800d5b8" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/pages/CancellationStudio.jsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/pages/CancellationStudio.jsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/frontend/src/pages/ResolverPlayground.jsx" beforeDir="false" afterPath="$PROJECT_DIR$/frontend/src/pages/ResolverPlayground.jsx" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/mandateshield/controller/CancellationController.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/mandateshield/controller/CancellationController.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/mandateshield/service/CancellationAndRevocationService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/mandateshield/service/CancellationAndRevocationService.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/mandateshield/service/SarvamMerchantEnrichmentService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/mandateshield/service/SarvamMerchantEnrichmentService.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/target/classes/com/mandateshield/service/CancellationAndRevocationService$CancellationPlaybook.class" beforeDir="false" afterPath="$PROJECT_DIR$/target/classes/com/mandateshield/service/CancellationAndRevocationService$CancellationPlaybook.class" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -37,18 +43,18 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;Application.GitCommitTest.executor&quot;: &quot;Run&quot;,
-    &quot;Application.MandateShieldApplication.executor&quot;: &quot;Run&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;prototype&quot;,
-    &quot;kotlin-language-version-configured&quot;: &quot;true&quot;,
-    &quot;last_opened_file_path&quot;: &quot;C:/Users/sdiks/OneDrive/Desktop/MandateShield&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;preferences.pluginManager&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "Application.GitCommitTest.executor": "Run",
+    "Application.MandateShieldApplication.executor": "Run",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.git.unshallow": "true",
+    "git-widget-placeholder": "prototype3",
+    "kotlin-language-version-configured": "true",
+    "last_opened_file_path": "C:/Users/sdiks/OneDrive/Desktop/MandateShield",
+    "settings.editor.selected.configurable": "preferences.pluginManager"
   }
-}</component>
+}]]></component>
   <component name="RunManager">
     <configuration name="GitCommitTest" type="Application" factoryName="Application" temporary="true" nameIsGenerated="true">
       <option name="MAIN_CLASS_NAME" value="com.mandateshield.GitCommitTest" />

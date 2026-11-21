@@ -70,7 +70,7 @@ public class MongoSeeder {
             new String[]{"NYKAA",                "NYKAA",                "E-Commerce"},
             // Food & Dining
             new String[]{"SWIGGY",               "SWIGGY",               "Food & Dining"},
-            new String[]{"PAYU SWIGGYONE",       "SWIGGY ONE",           "Food & Dining"},
+            new String[]{"PAYU SWIGGYONE",       "SWIGGY",               "Food & Dining"},
             new String[]{"ZOMATO",               "ZOMATO",               "Food & Dining"},
             new String[]{"ZOMATO GOLD",          "ZOMATO GOLD",          "Food & Dining"},
             new String[]{"BLINKIT",              "BLINKIT",              "Grocery"},

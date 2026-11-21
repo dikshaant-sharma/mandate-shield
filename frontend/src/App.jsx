@@ -3,7 +3,7 @@ import Sidebar from './components/Sidebar';
 import ResolverPlayground from './pages/ResolverPlayground';
 import CancellationStudio from './pages/CancellationStudio';
 import { addTransaction, deleteTransaction, fetchDashboard, fetchMe, fetchTransactions, generateLetter, getPlaybook, login, register, requestCancellation, confirmCancellation, reportUnused, confirmSubscriptionActivity, runPipeline, importTransactions, seedSyntheticHistory, fetchSyntheticEvaluation } from './api';
-import { ReceiptText, Plus, X, ArrowUpRight, ShieldCheck, LoaderCircle, Upload, Sparkles } from 'lucide-react';
+import { ReceiptText, Plus, X, ArrowUpRight, ShieldCheck, LoaderCircle, Upload, Sparkles, Mail } from 'lucide-react';
 
 const money = (amount, currency='INR') => new Intl.NumberFormat('en-IN',{style:'currency',currency,maximumFractionDigits:2}).format(Number(amount||0));
 const frequencyLabel = (frequency) => ({DAILY:'Daily',WEEKLY:'Weekly',BIWEEKLY:'Every 2 weeks',MONTHLY:'Monthly',BIMONTHLY:'Every 2 months',QUARTERLY:'Every 3 months',SEMIANNUAL:'Twice a year',ANNUAL:'Yearly',IRREGULAR:'Variable schedule',UNKNOWN:'Unknown'}[frequency]||'Recurring');
@@ -139,9 +139,47 @@ export default function App(){
     }
   };
 
+  const [letterMeta, setLetterMeta] = useState({ bankEmail: '', emailSubject: '' });
+
   const removeTransaction=async(id)=>{try{await deleteTransaction(id);setTransactions(prev=>prev.filter(tx=>tx.id!==id));setNotice('Transaction deleted.');}catch{setNotice('Could not delete this transaction.');}};
-  const openCancellation=async(sub)=>{setCancelTarget(sub);setLetter('');setCancelRequested(false);setCancelForm({bankName:'',mandateRef:''});try{setPlaybook(await getPlaybook(sub.paymentRail,sub.merchantName));}catch{setPlaybook(null);}};
-  const createLetter=async(e)=>{e.preventDefault();setCancelBusy(true);try{const result=await generateLetter({subscriptionId:cancelTarget.id,...cancelForm});setLetter(result.letter);}catch(err){setNotice(err.response?.data?.message||'Could not prepare the notice.');}finally{setCancelBusy(false);}};
+  const openCancellation=async(sub)=>{setCancelTarget(sub);setLetter('');setLetterMeta({ bankEmail: '', emailSubject: '' });setCancelRequested(false);setCancelForm({bankName:'',mandateRef:''});try{setPlaybook(await getPlaybook(sub.paymentRail,sub.merchantName));}catch{setPlaybook(null);}};
+  const triggerMailClient = (recipient, subject, body) => {
+    // 1. Try invisible link click for default desktop client (Outlook, Mail, Thunderbird)
+    const mailtoUrl = `mailto:${recipient}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    const link = document.createElement('a');
+    link.href = mailtoUrl;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const openGmailWebCompose = (recipient, subject, body) => {
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(recipient)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.open(gmailUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const createLetter=async(e)=>{
+    e.preventDefault();
+    setCancelBusy(true);
+    try{
+      const result=await generateLetter({subscriptionId:cancelTarget.id,...cancelForm});
+      setLetter(result.letter);
+      const recipient = result.bankEmail || 'nodal.officer@bank.com';
+      const subject = result.emailSubject || `STATUTORY NOTICE: Immediate Revocation of Mandate - ${cancelTarget.merchantName?.toUpperCase()}`;
+      setLetterMeta({
+        bankEmail: recipient,
+        emailSubject: subject
+      });
+      // Trigger default mail client
+      triggerMailClient(recipient, subject, result.letter);
+      setNotice('Opening mail client... Or click "Open in Gmail" below if you use browser mail.');
+    }catch(err){
+      setNotice(err.response?.data?.message||'Could not prepare the notice.');
+    }finally{
+      setCancelBusy(false);
+    }
+  };
   const markCancelled=async()=>{setCancelBusy(true);try{if(!cancelRequested){await requestCancellation(cancelTarget.id);setCancelRequested(true);setNotice('Cancellation request recorded. Keep the confirmation and verify the next statement.');}else{await confirmCancellation(cancelTarget.id);setNotice('Cancellation confirmed and removed from your active commitments.');setCancelTarget(null);}await load();}catch(err){setNotice(err.response?.data?.message||'Could not update this recurring payment.');}finally{setCancelBusy(false);}};
   const markUnused=async(sub)=>{try{await reportUnused(sub.id);await load();setNotice(`Saved your report that you stopped using ${sub.merchantName}.`);}catch{setNotice('Could not save your usage report.');}};
   const markUsed=async(sub)=>{try{await confirmSubscriptionActivity(sub.id);await load();setNotice(`Usage confirmed for ${sub.merchantName}.`);}catch{setNotice('Could not save your usage confirmation.');}};
@@ -236,7 +274,7 @@ export default function App(){
     </main>
 
     {showForm&&<TransactionForm onSave={saveTransaction} onClose={()=>setShowForm(false)}/>}
-    {cancelTarget&&<div className="modal-backdrop"><section className="transaction-modal"><div className="modal-heading"><div><span className="eyebrow">{cancelTarget.merchantName}</span><h2>Cancellation options</h2></div><button className="btn btn-secondary btn-icon" onClick={()=>setCancelTarget(null)}><X size={18}/></button></div><div className="playbook-box"><strong>Steps through {cancelTarget.paymentRail?.replaceAll('_',' ')}</strong>{playbook?<><h3>{playbook.route}</h3><strong>Payment provider</strong><ol>{playbook.paymentSteps?.map((step,i)=><li key={`p${i}`}>{step}</li>)}</ol><strong>Merchant</strong><ol>{playbook.merchantSteps?.map((step,i)=><li key={`m${i}`}>{step}</li>)}</ol><strong>If charges continue</strong><ol>{playbook.ifItContinues?.map((step,i)=><li key={`e${i}`}>{step}</li>)}</ol><a href={playbook.sourceUrl} target="_blank" rel="noreferrer">Official guidance · checked {playbook.reviewedOn}</a></>:<p>Check your bank or provider’s current instructions before proceeding.</p>}<small>MandateShield cannot cancel a payment for you. Keep the provider’s confirmation and check the next statement.</small></div>{!letter?<form onSubmit={createLetter} className="transaction-form"><label className="form-group"><span className="form-label">Bank or payment provider</span><input required className="form-control" value={cancelForm.bankName} onChange={e=>setCancelForm({...cancelForm,bankName:e.target.value})} placeholder="e.g. HDFC Bank"/></label><label className="form-group"><span className="form-label">Mandate reference or descriptor</span><input required className="form-control" value={cancelForm.mandateRef} onChange={e=>setCancelForm({...cancelForm,mandateRef:e.target.value})} placeholder="Reference shown by your bank"/></label><div className="modal-actions"><button type="button" className="btn btn-secondary" onClick={()=>setCancelTarget(null)}>Close</button><button className="btn btn-primary" disabled={cancelBusy}>{cancelBusy?'Preparing…':'Prepare cancellation notice'}</button></div></form>:<><pre className="letter-preview">{letter}</pre><div className="modal-actions"><button className="btn btn-secondary" onClick={()=>navigator.clipboard.writeText(letter)}>Copy notice</button><button className="btn btn-primary" disabled={cancelBusy} onClick={markCancelled}>{cancelBusy?'Saving…':cancelRequested?'I have confirmation it stopped':'I submitted the cancellation request'}</button></div></>}</section></div>}
+    {cancelTarget&&<div className="modal-backdrop"><section className="transaction-modal"><div className="modal-heading"><div><span className="eyebrow">{cancelTarget.merchantName}</span><h2>Cancellation options</h2></div><button className="btn btn-secondary btn-icon" onClick={()=>setCancelTarget(null)}><X size={18}/></button></div><div className="playbook-box"><strong>Steps through {cancelTarget.paymentRail?.replaceAll('_',' ')}</strong>{playbook?<><h3>{playbook.route}</h3><strong>Payment provider</strong><ol>{playbook.paymentSteps?.map((step,i)=><li key={`p${i}`}>{step}</li>)}</ol><strong>Merchant</strong><ol>{playbook.merchantSteps?.map((step,i)=><li key={`m${i}`}>{step}</li>)}</ol><strong>If charges continue</strong><ol>{playbook.ifItContinues?.map((step,i)=><li key={`e${i}`}>{step}</li>)}</ol><a href={playbook.sourceUrl} target="_blank" rel="noreferrer">Official guidance · checked {playbook.reviewedOn}</a></>:<p>Check your bank or provider’s current instructions before proceeding.</p>}<small>MandateShield cannot cancel a payment for you. Keep the provider’s confirmation and check the next statement.</small></div>{!letter?<form onSubmit={createLetter} className="transaction-form"><label className="form-group"><span className="form-label">Bank or payment provider</span><input required className="form-control" value={cancelForm.bankName} onChange={e=>setCancelForm({...cancelForm,bankName:e.target.value})} placeholder="e.g. HDFC Bank"/></label><label className="form-group"><span className="form-label">Mandate reference or descriptor</span><input required className="form-control" value={cancelForm.mandateRef} onChange={e=>setCancelForm({...cancelForm,mandateRef:e.target.value})} placeholder="Reference shown by your bank"/></label><div className="modal-actions"><button type="button" className="btn btn-secondary" onClick={()=>setCancelTarget(null)}>Close</button><button className="btn btn-primary" disabled={cancelBusy}>{cancelBusy?'Preparing…':'Prepare cancellation notice'}</button></div></form>:<><pre className="letter-preview">{letter}</pre><div className="modal-actions" style={{ flexWrap: 'wrap', gap: '8px' }}><button type="button" className="btn btn-primary" onClick={()=>{triggerMailClient(letterMeta.bankEmail||'nodal.officer@bank.com', letterMeta.emailSubject||`STATUTORY NOTICE: Immediate Revocation of Mandate - ${cancelTarget.merchantName?.toUpperCase()}`, letter);}}><Mail size={15}/>Open Mail App</button><button type="button" className="btn btn-secondary" style={{ background: '#ea4335', color: '#fff', borderColor: '#ea4335' }} onClick={()=>{openGmailWebCompose(letterMeta.bankEmail||'nodal.officer@bank.com', letterMeta.emailSubject||`STATUTORY NOTICE: Immediate Revocation of Mandate - ${cancelTarget.merchantName?.toUpperCase()}`, letter);}}><ArrowUpRight size={15}/>Open in Gmail (Browser)</button><button className="btn btn-secondary" onClick={()=>navigator.clipboard.writeText(letter)}>Copy notice</button><button className="btn btn-secondary" disabled={cancelBusy} onClick={markCancelled}>{cancelBusy?'Saving…':cancelRequested?'I have confirmation it stopped':'I submitted the cancellation request'}</button></div></>}</section></div>}
   </div>;
 }
 

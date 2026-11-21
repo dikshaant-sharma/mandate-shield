@@ -118,49 +118,48 @@ public class MerchantResolverEngine {
         // ------------------------------------------------------------------
         // Tier 2 — Heuristic extraction (fuzzy + alias + token)
         // The confidence score is derived from the full heuristic pipeline output, NOT set prematurely.
+        // - Known brand match  → ≥83% → returned immediately (no Sarvam needed)
+        // - Unrecognised desc  → ~50% placeholder name (best readable tokens) → always triggers Sarvam async
         // ------------------------------------------------------------------
         HeuristicExtractionEngine.HeuristicResolutionResult heur = heuristicEngine.resolve(rawDescriptor);
         if (!"UNKNOWN".equalsIgnoreCase(heur.brandName()) && heur.confidenceScore() >= 0.80) {
             log.info("Tier 2 (Heuristic) match for '{}' -> brand='{}', confidence={}", rawDescriptor, heur.brandName(), heur.confidenceScore());
             saveRawTransaction(userId, rawDescriptor, amount, currency, transactionDate,
                     heur.brandName(), heur.category(), heur.confidenceScore(), heur.resolutionTier());
-            // NOTE: No write-back to pattern repo. Tier 2 results are NOT promoted to Tier 1.
             return new ResolveResult(heur.brandName(), heur.category(), heur.gateway(),
                     heur.confidenceScore(), heur.resolutionTier(), "HEURISTIC_RULE");
         }
 
-        // ------------------------------------------------------------------
-        // Tier 2.5 — Unnamed descriptor layer
-        // If no brand resolved, check if the same descriptor string recurs for this user.
-        // If it does, extract the common unique part of the descriptor string as name,
-        // so that the recurring detection engine can group these payments.
-        // ------------------------------------------------------------------
+        // Heuristic returned a ~50% placeholder OR UNKNOWN — always send to Sarvam async for proper identification
+        // Show the placeholder immediately so user sees something meaningful, Sarvam will update it shortly
+        String displayName = "UNKNOWN".equalsIgnoreCase(heur.brandName()) ? "UNKNOWN" : heur.brandName();
+        double displayConf  = heur.confidenceScore(); // 0.50 for placeholder, 0.0 for truly unresolvable
+        String displayCat   = "Identifying...".equals(heur.category()) ? "Identifying..." : heur.category();
+
+        log.info("No confirmed Tier 1/2 brand for '{}' — placeholder='{}', conf={}. Scheduling Sarvam async enrichment.",
+                rawDescriptor, displayName, displayConf);
+        saveRawTransaction(userId, rawDescriptor, amount, currency, transactionDate,
+                displayName, displayCat, displayConf, heur.resolutionTier());
+
+
+        // Tier 2.5 — Recurring unnamed: if same descriptor recurred before, extract cleaner name
+        // Returns immediately with RECURRING_PATTERN_EXTRACT matchedPattern for grouping/tracking
         RecurringExtraction recurringMatch = resolveByRecurringPattern(userId, rawDescriptor);
-        if (recurringMatch != null) {
-            String category = "Recurring — Unidentified";
-            log.info("Tier 2.5 (Recurring unnamed) match for '{}' -> name='{}', confidence={}",
+        if (recurringMatch != null && !"UNKNOWN".equalsIgnoreCase(recurringMatch.merchantName())) {
+            String recurringCat = "Recurring — Unidentified";
+            log.info("Tier 2.5 upgraded placeholder for '{}' -> name='{}', conf={}",
                     rawDescriptor, recurringMatch.merchantName(), recurringMatch.confidence());
+            // Update the already-saved transaction with the better Tier 2.5 name
             saveRawTransaction(userId, rawDescriptor, amount, currency, transactionDate,
-                    recurringMatch.merchantName(), category, recurringMatch.confidence(), ResolutionTier.TIER_2);
-            // Schedule Sarvam async enrichment — it's an unnamed recurring descriptor
-            sarvamEnrichment.scheduleIfSuspicious(userId, rawDescriptor, recurringMatch.confidence(), "UNKNOWN");
-            return new ResolveResult(recurringMatch.merchantName(), category, extractGateway(rawDescriptor),
-                    recurringMatch.confidence(), ResolutionTier.TIER_2, "RECURRING_PATTERN_EXTRACT");
+                    recurringMatch.merchantName(), recurringCat, recurringMatch.confidence(), ResolutionTier.TIER_2);
+            sarvamEnrichment.scheduleIfSuspicious(userId, rawDescriptor, recurringMatch.confidence(), recurringMatch.merchantName());
+            return new ResolveResult(recurringMatch.merchantName(), recurringCat,
+                    heur.gateway(), recurringMatch.confidence(), ResolutionTier.TIER_2, "RECURRING_PATTERN_EXTRACT");
         }
 
-        // ------------------------------------------------------------------
-        // Tier 3 — Sarvam AI async enrichment (scheduled only, never synchronous)
-        // Fire and forget. The transaction is saved now with low confidence;
-        // the async task will update it once Sarvam responds.
-        // ------------------------------------------------------------------
-        double unknownConfidence = heur.confidenceScore(); // actual score from full heuristic run
-        log.info("No Tier 1/2 match for '{}' — confidence={}. Scheduling Sarvam async enrichment.",
-                rawDescriptor, unknownConfidence);
-        saveRawTransaction(userId, rawDescriptor, amount, currency, transactionDate,
-                heur.brandName(), heur.category(), unknownConfidence, heur.resolutionTier());
-        sarvamEnrichment.scheduleIfSuspicious(userId, rawDescriptor, unknownConfidence, heur.brandName());
-        return new ResolveResult(heur.brandName(), heur.category(), heur.gateway(),
-                unknownConfidence, heur.resolutionTier(), null);
+        // Always fire Sarvam async for unconfirmed descriptors (placeholder or UNKNOWN)
+        sarvamEnrichment.scheduleIfSuspicious(userId, rawDescriptor, displayConf, displayName);
+        return new ResolveResult(displayName, displayCat, heur.gateway(), displayConf, heur.resolutionTier(), null);
     }
 
     /**
@@ -236,7 +235,10 @@ public class MerchantResolverEngine {
                             .replaceAll("[*_\\-./#@|:;,(){}\\[\\]\\d]+", " ")
                             .trim()
                             .split("\\s+"))
-                    .filter(t -> t.length() >= 2)
+                    .filter(t -> t.length() >= 3)                        // drop short noise tokens
+                    .filter(t -> !t.matches("\\d+"))                              // drop pure numbers
+                    .filter(t -> !t.matches("[A-Z]*\\d+[A-Z0-9]*"))              // drop txn IDs like XYZ99182
+                    .filter(t -> !t.matches("[A-Z]{1,2}"))                         // drop 2-char state/country codes
                     .filter(t -> !heuristicEngine.getStopwords().contains(t))
                     .filter(t -> !heuristicEngine.getGateways().contains(t))
                     .distinct()
@@ -244,8 +246,8 @@ public class MerchantResolverEngine {
 
             String commonPart;
             if (uniqueTokens.isEmpty()) {
-                String clean = rawDescriptor.replaceAll("[^A-Za-z]+", " ").trim();
-                commonPart = clean.isBlank() ? "RECURRING_MANDATE" : clean;
+                // No meaningful tokens after all filters — return null so caller keeps heuristic placeholder
+                return null;
             } else {
                 commonPart = String.join(" ", uniqueTokens);
             }

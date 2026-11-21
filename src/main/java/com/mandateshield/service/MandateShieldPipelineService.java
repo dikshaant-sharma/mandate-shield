@@ -55,9 +55,12 @@ public class MandateShieldPipelineService {
 
         for (RawTransactionDocument tx : transactions) {
             if (tx.getRawDescriptor() == null || tx.getRawDescriptor().isBlank()) continue;
+            // Never overwrite transactions already enriched by Sarvam (Tier 3) with stale heuristics
+            if (tx.getResolutionTier() == com.mandateshield.domain.ResolutionTier.TIER_3) continue;
+
             MerchantResolverEngine.ResolveResult result = resolverEngine.resolveExisting(tx);
             // A low-confidence descriptor is being enriched in the background; don't save a stale snapshot.
-            if ("UNKNOWN".equalsIgnoreCase(result.brandName()) && result.confidenceScore() <= 0.50) continue;
+            if ("UNKNOWN".equalsIgnoreCase(result.brandName()) && result.confidenceScore() <= 0.65) continue;
             if (result.brandName() != null && !result.brandName().isBlank()
                     && !"UNKNOWN".equalsIgnoreCase(result.brandName())) {
                 tx.setResolvedMerchantName(result.brandName());

@@ -242,21 +242,22 @@ export default function ResolverPlayground({ activeUser, isDemoMode }) {
                   </div>
                 </div>
 
-                {/* Matched Pattern details */}
+                {/* Resolution Method details */}
                 <div style={{ marginTop: '8px' }}>
                   <span style={{ fontSize: '11px', color: 'var(--color-text-muted)', display: 'block', marginBottom: '4px' }}>
-                    Resolution Method
+                    Resolution Pipeline
                   </span>
                   <div style={{
                     background: 'var(--color-bg-base)',
                     padding: '8px 12px',
                     borderRadius: 'var(--radius-sm)',
-                    fontFamily: 'var(--font-mono)',
                     fontSize: '12px',
-                    color: 'var(--color-accent)',
-                    wordBreak: 'break-all'
+                    color: 'var(--color-accent)'
                   }}>
-                    {result.matchedPattern || 'Heuristic fallback — Sarvam AI async enrichment pending'}
+                    {result.resolutionTier === 'TIER_1' && 'Verified via system-approved alias database'}
+                    {result.resolutionTier === 'TIER_2' && (result.matchedPattern === 'RECURRING_PATTERN_EXTRACT' ? 'Extracted recurring pattern identifier' : 'Automated heuristic classifier')}
+                    {result.resolutionTier === 'TIER_3' && 'Enriched via Sarvam AI Indian-context model'}
+                    {(!result.resolutionTier || (result.resolutionTier !== 'TIER_1' && result.resolutionTier !== 'TIER_2' && result.resolutionTier !== 'TIER_3')) && 'Standard resolver pipeline'}
                   </div>
                 </div>
               </div>

@@ -75,8 +75,8 @@ public class TransactionController {
         RawTransactionDocument saved = transactions.save(candidate);
         if (suppliedMerchant && Boolean.TRUE.equals(request.shareMerchant())) {
             sharedMerchantKnowledge.confirm(descriptor, result.brandName(), result.category());
-        } else if ("UNKNOWN".equalsIgnoreCase(result.brandName())) {
-            // Schedule Sarvam async enrichment for unknown low-confidence descriptors
+        } else if (result.confidenceScore() < 0.65 || "UNKNOWN".equalsIgnoreCase(result.brandName())) {
+            // Send request directly to Sarvam in asynchronous manner for any confidence < 65% or unknown
             sarvamEnrichment.scheduleIfSuspicious(userId, descriptor, result.confidenceScore(), result.brandName());
         }
         // NOTE: No asyncWriteBackPattern — Tier 2 results are NOT auto-promoted to Tier 1 cache.

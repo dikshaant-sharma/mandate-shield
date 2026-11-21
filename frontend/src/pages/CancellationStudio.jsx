@@ -5,7 +5,10 @@ import {
   Check, 
   Download, 
   Printer, 
-  BookOpen
+  BookOpen,
+  Mail,
+  ExternalLink,
+  ShieldAlert
 } from 'lucide-react';
 import { getPlaybook, generateLetter } from '../api';
 import { SAMPLE_REVOCATION_PRESETS } from '../data/sampleData';
@@ -16,19 +19,23 @@ export default function CancellationStudio({ activeUser, isDemoMode, initialData
   const [playbookContent, setPlaybookContent] = useState('');
 
   // Notice generator form state
-  const [userName, setUserName] = useState(initialData?.userName || activeUser.name);
+  const [userName, setUserName] = useState(initialData?.userName || activeUser?.name || 'Account Holder');
   const [bankName, setBankName] = useState(initialData?.bankName || 'HDFC Bank');
   const [merchantName, setMerchantName] = useState(initialData?.merchantName || 'Adobe Creative Cloud');
   const [mandateRef, setMandateRef] = useState(initialData?.mandateRef || 'MND-HDFC-99281-ADOBE');
   
   const [generatedLetter, setGeneratedLetter] = useState('');
+  const [bankEmail, setBankEmail] = useState('');
+  const [emailSubject, setEmailSubject] = useState('');
   const [letterError, setLetterError] = useState('');
   const [generating, setGenerating] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [mailSentStatus, setMailSentStatus] = useState(false);
 
   const handleGenerateLetter = useCallback(async () => {
     setGenerating(true);
     setLetterError('');
+    setMailSentStatus(false);
     try {
       if (!isDemoMode) {
         const res = await generateLetter({
@@ -37,25 +44,40 @@ export default function CancellationStudio({ activeUser, isDemoMode, initialData
           mandateRef: mandateRef || 'REF-DEFAULT'
         });
         setGeneratedLetter(res.letter);
+        setBankEmail(res.bankEmail || 'nodal.officer@bank.com');
+        setEmailSubject(res.emailSubject || `STATUTORY NOTICE: Revocation of Mandate - ${merchantName.toUpperCase()}`);
       } else {
         await new Promise(r => setTimeout(r, 150));
         const today = new Date().toISOString().split('T')[0];
-        setGeneratedLetter(`To,
-The Branch Manager, ${bankName || 'Bank'}
+        const letter = `To,
+The Nodal Officer / Grievance Redressal Officer / Branch Manager
+${bankName || 'Bank'}
 
-SUBJECT: NOTICE OF REVOCATION AND CANCELLATION OF MANDATE FOR ${merchantName.toUpperCase()}
+SUBJECT: STATUTORY NOTICE OF IMMEDIATE REVOCATION & WITHDRAWAL OF MANDATE / AUTO-DEBIT CONSENT
+REFERENCE: RBI Circular RBI/2020-21/68 on e-Mandates & Standing Instructions
 
 Dear Sir/Madam,
 
-I, ${userName}, request revocation of the recurring payment mandate
-registered under Reference/Descriptor: ${mandateRef} in favor of ${merchantName}.
+I, ${userName}, maintain an account/card facility with your institution.
 
-Please confirm the steps required to revoke this mandate and the effective date. This draft
-is a request for review and does not itself cancel the mandate or guarantee a legal outcome.
+Pursuant to the Reserve Bank of India (RBI) regulatory framework on Processing of e-Mandates / Standing Instructions / NACH, an account holder retains the unequivocal statutory right to withdraw and revoke consent for recurring debits at any time.
 
-Date: ${today}
+I hereby formally and irrevocably REVOKE, CANCEL, and WITHDRAW my consent for any further debits under the following mandate with IMMEDIATE EFFECT:
+
+• Merchant / Beneficiary Name : ${merchantName.toUpperCase()}
+• Mandate Reference / UMN / UMRN: ${mandateRef}
+• Payment Facility            : ${bankName} Account / Card
+• Revocation Notice Date       : ${today}
+
+Please note that any debit executed by your institution against this mandate subsequent to receipt of this notice shall be deemed unauthorized under RBI guidelines, and you are requested to block all future presentments immediately.
+
+Kindly provide a written acknowledgement confirming this mandate cancellation along with the formal cancellation ticket reference number.
+
 Sincerely,
-${userName}`);
+${userName}`;
+        setGeneratedLetter(letter);
+        setBankEmail('grievance.redressal@hdfcbank.com');
+        setEmailSubject(`STATUTORY NOTICE: Immediate Revocation of Mandate - ${merchantName.toUpperCase()} (Ref: ${mandateRef})`);
       }
     } catch (err) {
       setLetterError(err.response?.data?.message || 'Could not generate the notice. Check the details and try again.');
@@ -86,7 +108,7 @@ ${userName}`);
     const element = document.createElement("a");
     const file = new Blob([generatedLetter], { type: 'text/plain' });
     element.href = URL.createObjectURL(file);
-    element.download = `MandateRevocation_${merchantName.replace(/\s+/g, '_')}.txt`;
+    element.download = `RBI_MandateRevocation_${merchantName.replace(/\s+/g, '_')}.txt`;
     document.body.appendChild(element);
     element.click();
     document.body.removeChild(element);
@@ -97,9 +119,9 @@ ${userName}`);
     printWindow.document.write(`
       <html>
         <head>
-          <title>Cancellation Request Draft</title>
+          <title>Statutory Mandate Revocation Notice</title>
           <style>
-            body { font-family: monospace; white-space: pre-wrap; padding: 40px; line-height: 1.8; }
+            body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; white-space: pre-wrap; padding: 40px; line-height: 1.8; color: #111; }
           </style>
         </head>
         <body>${generatedLetter}</body>
@@ -107,6 +129,35 @@ ${userName}`);
     `);
     printWindow.document.close();
     printWindow.print();
+  };
+
+  // Direct 1-Click Mailto & Webmail Dispatcher to Bank Nodal Officer
+  const sendEmailToBank = () => {
+    if (!generatedLetter) return;
+    const recipient = bankEmail || 'nodal.officer@bank.com';
+    const subject = emailSubject || `Statutory Mandate Revocation Notice: ${merchantName}`;
+    const body = generatedLetter;
+
+    // Build mailto link
+    const mailtoUrl = `mailto:${recipient}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+
+    // Try opening mailto via invisible anchor click (bypasses browser navigation locks)
+    const link = document.createElement('a');
+    link.href = mailtoUrl;
+    link.style.display = 'none';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setMailSentStatus(true);
+  };
+
+  const openGmailWeb = () => {
+    if (!generatedLetter) return;
+    const recipient = bankEmail || 'nodal.officer@bank.com';
+    const subject = emailSubject || `Statutory Mandate Revocation Notice: ${merchantName}`;
+    const body = generatedLetter;
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(recipient)}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.open(gmailUrl, '_blank', 'noopener,noreferrer');
   };
 
   const applyPreset = (preset) => {
@@ -122,16 +173,17 @@ ${userName}`);
       {/* Banner */}
       <div className="hero-banner">
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-          <span className="badge badge-primary">Payment rail guidance</span>
+          <span className="badge badge-primary">Statutory Bank Revocation</span>
           <span style={{ fontSize: '12px', color: 'var(--color-text-muted)' }}>
-            Check the latest steps with your bank or payment provider
+            RBI Circular RBI/2020-21/68 Mandate Revocation Framework
           </span>
         </div>
         <h2 style={{ fontSize: '22px', fontWeight: 700, color: '#ffffff' }}>
-          Cancellation & Revocation Studio
+          1-Click Bank Mandate Revocation Studio
         </h2>
-        <p style={{ color: 'var(--color-text-secondary)', fontSize: '13px', maxWidth: '650px', marginTop: '4px' }}>
-          Draft a cancellation request and review payment rail guidance. Confirm requirements and completion with your bank or provider.
+        <p style={{ color: 'var(--color-text-secondary)', fontSize: '13px', maxWidth: '680px', marginTop: '4px' }}>
+          Exercise your statutory right under RBI regulations to stop unauthorized auto-debits.
+          Generate a legally binding revocation notice and <strong>dispatch it directly to your bank's grievance officer in 1 click</strong>.
         </p>
       </div>
 
@@ -188,12 +240,12 @@ ${userName}`);
         {/* Form */}
         <div className="card">
           <div className="card-header">
-            <span className="card-title">Cancellation Request Details</span>
-            <span className="badge badge-primary">Editable draft</span>
+            <span className="card-title">Mandate & Bank Parameters</span>
+            <span className="badge badge-primary">Statutory notice</span>
           </div>
           <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             <div className="form-group">
-              <label className="form-label">Full Account Holder Name</label>
+              <label className="form-label">Account Holder Full Name</label>
               <input
                 type="text"
                 className="form-control"
@@ -204,7 +256,7 @@ ${userName}`);
             </div>
 
             <div className="form-group">
-              <label className="form-label">Bank or Financial Institution</label>
+              <label className="form-label">Bank or Card Issuer Name</label>
               <input
                 type="text"
                 className="form-control"
@@ -226,7 +278,7 @@ ${userName}`);
             </div>
 
             <div className="form-group">
-              <label className="form-label">Mandate / URN Reference Number</label>
+              <label className="form-label">Mandate Reference / UMN / UMRN</label>
               <input
                 type="text"
                 className="form-control form-control-mono"
@@ -243,7 +295,7 @@ ${userName}`);
               style={{ width: '100%', justifyContent: 'center' }}
             >
               <FileText size={16} className={generating ? 'spinner' : ''} />
-              <span>{generating ? 'Drafting request...' : 'Generate cancellation request'}</span>
+              <span>{generating ? 'Drafting Statutory Notice...' : 'Generate Legal Revocation Notice'}</span>
             </button>
 
             {/* Presets */}
@@ -269,7 +321,7 @@ ${userName}`);
         {/* Legal Notice Preview & Actions */}
         <div className="card">
           <div className="card-header">
-            <span className="card-title">Request Draft Preview</span>
+            <span className="card-title">Legal Revocation Notice</span>
             <div style={{ display: 'flex', gap: '8px' }}>
               <button
                 onClick={copyToClipboard}
@@ -302,14 +354,68 @@ ${userName}`);
 
           <div className="card-body">
             {letterError && <div className="alert alert-error" role="alert">{letterError}</div>}
+            
             {generatedLetter ? (
-              <div className="letter-box">
-                {generatedLetter}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                {/* 1-Click Send Email Action Box */}
+                <div style={{
+                  background: 'rgba(59, 130, 246, 0.08)',
+                  border: '1px solid rgba(59, 130, 246, 0.3)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '16px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '12px'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Mail size={18} color="var(--color-primary-light)" />
+                      <strong style={{ fontSize: '14px', color: '#fff' }}>Direct 1-Click Bank Email Dispatch</strong>
+                    </div>
+                    <span className="badge badge-success">Official Grievance Email</span>
+                  </div>
+
+                  <div style={{ fontSize: '12px', color: 'var(--color-text-secondary)', display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 12px' }}>
+                    <strong>Bank Officer:</strong> <span>{bankEmail || 'nodal.officer@bank.com'}</span>
+                    <strong>Legal Ref:</strong> <span>RBI Circular RBI/2020-21/68 Statutory Right</span>
+                  </div>
+
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <button
+                      onClick={sendEmailToBank}
+                      className="btn btn-primary"
+                      style={{ flex: 1, minWidth: '220px', justifyContent: 'center', padding: '10px 16px', fontSize: '13px', fontWeight: 600 }}
+                    >
+                      <Mail size={16} />
+                      <span>Open Mail App (Outlook / Apple Mail)</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={openGmailWeb}
+                      className="btn btn-secondary"
+                      style={{ minWidth: '180px', justifyContent: 'center', padding: '10px 16px', fontSize: '13px', fontWeight: 600, background: '#ea4335', color: '#fff', borderColor: '#ea4335' }}
+                    >
+                      <ExternalLink size={15} />
+                      <span>Open in Gmail (Browser)</span>
+                    </button>
+                  </div>
+
+                  {mailSentStatus && (
+                    <div style={{ fontSize: '12px', color: 'var(--color-success)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Check size={14} />
+                      <span>Dispatch triggered! If your default mail app isn't configured, click "Open in Gmail" above.</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="letter-box">
+                  {generatedLetter}
+                </div>
               </div>
             ) : (
               <div className="empty-state">
                 <FileText size={32} color="var(--color-text-muted)" />
-                <p>Fill in parameters on the left to generate the revocation notice.</p>
+                <p>Fill in parameters on the left to generate the statutory revocation notice and email dispatcher.</p>
               </div>
             )}
           </div>
