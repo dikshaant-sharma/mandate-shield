@@ -26,12 +26,12 @@ spring:
   task:
     execution:
       pool:
-        core-size: 4
-        max-size: 8
+        core-size: 2
+        max-size: 4
       thread-name-prefix: ms-async-
 
 server:
-  port: 8080
+  port: ${PORT:8080}
 
 management:
   endpoints:

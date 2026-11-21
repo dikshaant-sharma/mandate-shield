@@ -41,6 +41,6 @@ COPY --from=backend-builder /app/target/*.jar app.jar
 # Expose backend port
 EXPOSE 8080
 
-ENV JAVA_OPTS="-XX:+UseZGC -XX:+ZGenerational -Xmx512m -Xms256m"
+ENV JAVA_OPTS="-XX:+UseZGC -Xms128m -Xmx256m"
 
 ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
