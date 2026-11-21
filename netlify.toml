@@ -1,0 +1,18 @@
+[build]
+  base = "frontend"
+  # npm ci installs a clean, Linux-native dependency tree from package-lock.json,
+  # replacing the partial (Windows-only) node_modules that is committed to git.
+  command = "npm ci && npm run build"
+  publish = "dist"
+
+[build.environment]
+  NODE_VERSION = "22"
+  # Public backend URL (not a secret). Vite inlines it at build time;
+  # the frontend calls ${VITE_API_URL}/api/v1.
+  VITE_API_URL = "https://mandate-shield.onrender.com"
+
+# Single-page app: let React Router handle client-side routes
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
