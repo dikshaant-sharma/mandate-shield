@@ -1,9 +1,12 @@
 import axios from 'axios';
 
+// Globally hardcoded backend root on Render for Netlify, Vercel and production deployments
+const BACKEND_ROOT = 'https://mandate-shield.onrender.com';
+
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ? `${import.meta.env.VITE_API_URL}/api/v1` : '/api/v1',
+  baseURL: `${BACKEND_ROOT}/api/v1`,
   headers: { 'Content-Type': 'application/json' },
-  timeout: 15000
+  timeout: 30000
 });
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('mandateshield_token');
