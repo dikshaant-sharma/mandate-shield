@@ -1,0 +1,11 @@
+# Local secrets - never commit
+.env
+.env.local
+.env.*.local
+
+# Build output
+target/
+frontend/dist/
+
+# Dependencies
+frontend/node_modules/

@@ -11,7 +11,9 @@ spring:
         chat:
           model: ${MANDATESHIELD_GEMINI_MODEL:gemini-3.8-flash}
           temperature: 0.0
-          max-output-tokens: 32
+          # Must exceed the thinking budget: with thinking-level LOW the model spends
+          # ~100 reasoning tokens, so 32 truncated every reply to empty content.
+          max-output-tokens: 256
           thinking-level: LOW
   application:
     name: MandateShield

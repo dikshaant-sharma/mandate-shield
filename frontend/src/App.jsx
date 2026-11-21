@@ -20,11 +20,59 @@ function AuthScreen({onAuthenticated}) {
   </form><p className="auth-switch">{mode==='login'?"New to MandateShield?":"Already have an account?"} <button onClick={()=>{setMode(mode==='login'?'register':'login');setError('');}}>{mode==='login'?'Create an account':'Sign in'}</button></p></section></main>;
 }
 
+function parseBankSms(text) {
+  if (!text || !text.trim()) return null;
+  const clean = text.trim();
+  // Match amount (Rs. 649, Rs 1499.00, INR 499)
+  const amtMatch = clean.match(/(?:Rs\.?|INR)\s*([\d,]+(?:\.\d{1,2})?)/i);
+  const amount = amtMatch ? amtMatch[1].replace(/,/g, '') : '';
+  
+  // Match rail
+  let paymentRail = 'OTHER';
+  if (/UPI|AUTOPAY/i.test(clean)) paymentRail = 'UPI';
+  else if (/CREDIT CARD|CARD ENDING|ON CARD/i.test(clean)) paymentRail = 'CREDIT_CARD';
+  else if (/DEBIT CARD/i.test(clean)) paymentRail = 'DEBIT_CARD';
+  else if (/ACH|NACH|MANDATE/i.test(clean)) paymentRail = 'NACH';
+
+  // Extract merchant / descriptor candidate
+  let descriptor = '';
+  const atMatch = clean.match(/(?:at|to|in favor of|info:)\s+([^.,;\n]+)/i);
+  if (atMatch) {
+    descriptor = atMatch[1].trim();
+  } else {
+    // fallback: find capital words sequence
+    const words = clean.split(/\s+/).filter(w => w.length > 2 && /^[A-Z0-9_*]+$/.test(w));
+    descriptor = words.slice(0, 3).join(' ') || clean.slice(0, 40);
+  }
+
+  return { amount, paymentRail, descriptor };
+}
+
 function TransactionForm({onSave,onClose}) {
   const [today]=useState(()=>new Date().toISOString().slice(0,10));
   const [saving,setSaving]=useState(false);
   const [error,setError]=useState('');
+  const [smsInput, setSmsInput]=useState('');
+  const [showSmsBox, setShowSmsBox]=useState(false);
   const [form,setForm]=useState({merchant:'',merchantName:'',shareMerchant:false,trialTransaction:false,trialEndDate:'',trialConversionAmount:'',amount:'',currency:'INR',category:'',paymentRail:'UPI',date:today});
+
+  const handleSmsParse = () => {
+    const parsed = parseBankSms(smsInput);
+    if (!parsed || !parsed.amount) {
+      setError('Could not extract amount or merchant from this SMS. Check the text format.');
+      return;
+    }
+    setForm(prev => ({
+      ...prev,
+      amount: parsed.amount || prev.amount,
+      paymentRail: parsed.paymentRail || prev.paymentRail,
+      merchant: parsed.descriptor || prev.merchant
+    }));
+    setShowSmsBox(false);
+    setSmsInput('');
+    setError('');
+  };
+
   const submit=async(e)=>{
     e.preventDefault();
     setSaving(true);setError('');
@@ -32,7 +80,19 @@ function TransactionForm({onSave,onClose}) {
     catch{setError('Could not save this transaction. Please try again.');}
     finally{setSaving(false);}
   };
-  return <div className="modal-backdrop" onMouseDown={e=>e.target===e.currentTarget&&onClose()}><section className="transaction-modal"><div className="modal-heading"><div><span className="eyebrow">YOUR ACTIVITY</span><h2>Add a transaction</h2><p>Enter a payment to keep your spending history up to date.</p></div><button className="btn btn-secondary btn-icon" onClick={onClose} aria-label="Close"><X size={18}/></button></div><form onSubmit={submit} className="transaction-form">
+  return <div className="modal-backdrop" onMouseDown={e=>e.target===e.currentTarget&&onClose()}><section className="transaction-modal"><div className="modal-heading"><div><span className="eyebrow">YOUR ACTIVITY</span><h2>Add a transaction</h2><p>Enter a statement line or paste a bank debit SMS.</p></div><button className="btn btn-secondary btn-icon" onClick={onClose} aria-label="Close"><X size={18}/></button></div>
+    <div style={{padding:'0 24px 12px'}}>
+      <button type="button" className="btn btn-secondary btn-sm" style={{width:'100%',justifyContent:'center'}} onClick={()=>setShowSmsBox(!showSmsBox)}>
+        {showSmsBox ? 'Hide SMS Parser' : '📥 Paste Bank Debit SMS / Notification'}
+      </button>
+      {showSmsBox && (
+        <div style={{marginTop: 10, padding: 12, background: 'var(--surface-color, #1e293b)', borderRadius: 8, border: '1px solid #334155'}}>
+          <textarea rows={3} className="form-control" style={{fontSize: 13, resize: 'none'}} placeholder="e.g. HDFC Bank: Rs. 649.00 debited from a/c **4812 on 21-NOV-26 to NETFLIX MUMBAI. Info: UPI/AutoPay" value={smsInput} onChange={e=>setSmsInput(e.target.value)} />
+          <button type="button" className="btn btn-primary btn-sm" style={{marginTop: 8, width: '100%', justifyContent: 'center'}} onClick={handleSmsParse}>Auto-Fill Form from SMS</button>
+        </div>
+      )}
+    </div>
+  <form onSubmit={submit} className="transaction-form">
     <label className="form-group"><span className="form-label">Statement description</span><input autoFocus required maxLength="250" className="form-control" placeholder="Paste the bank line, e.g. ACH_INB_NFLX_IN_9812 or S_P_O_T_I_T_Y" value={form.merchant} onChange={e=>setForm({...form,merchant:e.target.value})}/><small className="field-hint">We keep this original text with your transaction and identify the merchant.</small></label>
     <label className="form-group"><span className="form-label">Recognized merchant (optional)</span><input maxLength="80" className="form-control" placeholder="Enter a name if you recognize it" value={form.merchantName} onChange={e=>setForm({...form,merchantName:e.target.value})}/></label>
     {form.merchantName.trim()&&<label className="check-row"><input type="checkbox" checked={form.shareMerchant} onChange={e=>setForm({...form,shareMerchant:e.target.checked})}/><span>Share this merchant match to help identify the same descriptor for other people. Only a one-way descriptor fingerprint and merchant name are shared; this transaction and account remain private.</span></label>}

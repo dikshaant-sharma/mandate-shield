@@ -1,0 +1,41 @@
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: mandateshield-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_DATABASE: MandateShield
+    volumes:
+      - mongo_data:/data/db
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mandateshield-backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      MONGODB_URI: mongodb://mongodb:27017/MandateShield
+      MANDATESHIELD_JWT_SECRET: ${MANDATESHIELD_JWT_SECRET:-k9V8w3Z7yQ2p5R8u1T4x7C0b3N6m9K2e5X8v1A4d7G0j3L6p9R2u5W8z1C4f7J0}
+      GOOGLE_GENAI_API_KEY: ${GOOGLE_GENAI_API_KEY:-}
+      MANDATESHIELD_CHAT_MODEL: ${MANDATESHIELD_CHAT_MODEL:-none}
+    depends_on:
+      - mongodb
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mandateshield-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  mongo_data:
